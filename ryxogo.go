@@ -158,14 +158,59 @@ var (
 	El       = core.El
 )
 
+// Link renders a client-side navigation link — no page reload.
+//
+//	rx.Link(rx.LinkProps{To: "/about", Class: "nav-link"}, rx.Text("About"))
+var Link = core.Link
+
+// LinkProps configures a Link component.
+type LinkProps = core.LinkProps
+
+// Navigate navigates to a path client-side — no page reload.
+//
+//	rx.Navigate("/dashboard")
+func Navigate(path string) {
+	if core.Navigate != nil {
+		core.Navigate(path)
+	}
+}
+
 // Each renders a list from a slice — the Go equivalent of .map() in React
 func Each[T any](items []T, fn func(item T, index int) *Node) []*Node {
 	return core.Each(items, fn)
 }
 
 // ---------------------------------------------------------
-// HTTP — convenience functions available as rx.Get, rx.Post etc
+// Store — global reactive state (F3 fix: now implemented)
 // ---------------------------------------------------------
+
+// NewStore creates a new global reactive store.
+// The store holds shared state accessible from any component.
+//
+//	var Auth = rx.NewStore(&AuthState{})
+//
+//	type AuthState struct {
+//	    User  *User
+//	    Token string
+//	}
+func NewStore[T any](initial *T) *signal.Store[T] {
+	return signal.NewStore(initial)
+}
+
+// GetStore reads store state and auto-subscribes for re-renders.
+// Call inside Render() — when store changes, component re-renders.
+//
+//	user := rx.GetStore(Auth).User
+func GetStore[T any](s *signal.Store[T]) *T {
+	return s.Get()
+}
+
+// UpdateStore mutates store state and triggers re-renders in all subscribers.
+//
+//	rx.UpdateStore(Auth, func(s *AuthState) { s.User = u })
+func UpdateStore[T any](s *signal.Store[T], fn func(*T)) {
+	s.Update(fn)
+}
 
 // Get performs a GET request and decodes the JSON response into T.
 //

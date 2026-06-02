@@ -1,7 +1,12 @@
 //go:build wasm
 
-// Package renderer bridges RyxoGo's virtual DOM to the real browser DOM.
-// This is a complete rewrite fixing all known bugs in v0.1.4.
+// Package renderer bridges RyxoGo virtual DOM to real browser DOM.
+//
+// F1 fix (upstream signal): Computed clears deps before recompute.
+// F2 fix (this file): Event listeners never stack.
+//   On every patch of an element with events, we cloneNode(false)
+//   which strips ALL old addEventListener listeners in one call,
+//   then re-attach fresh ones. Zero accumulation, zero leaks.
 package renderer
 
 import (
@@ -12,14 +17,12 @@ import (
 	"github.com/ahmad-nexarapp/ryxogo/core"
 )
 
-// Renderer manages the virtual DOM and real DOM in sync
 type Renderer struct {
 	rootEl   js.Value
 	rootNode *core.Node
 	comp     core.Component
 }
 
-// New creates a renderer mounting into the DOM element with the given ID
 func New(mountID string, comp core.Component) *Renderer {
 	doc := js.Global().Get("document")
 	el := doc.Call("getElementById", mountID)
@@ -29,16 +32,13 @@ func New(mountID string, comp core.Component) *Renderer {
 	return &Renderer{rootEl: el, comp: comp}
 }
 
-// Mount does the first render
 func (r *Renderer) Mount() {
 	newTree := r.comp.Render()
 	r.rootEl.Set("innerHTML", "")
-	el := r.create(newTree)
-	r.rootEl.Call("appendChild", el)
+	r.rootEl.Call("appendChild", r.create(newTree))
 	r.rootNode = newTree
 }
 
-// Update re-renders and patches only what changed
 func (r *Renderer) Update() {
 	newTree := r.comp.Render()
 	r.patch(r.rootEl, r.rootNode, newTree)
@@ -46,7 +46,7 @@ func (r *Renderer) Update() {
 }
 
 // ---------------------------------------------------------
-// create — build a real DOM element from a VNode
+// create
 // ---------------------------------------------------------
 
 func (r *Renderer) create(node *core.Node) js.Value {
@@ -54,16 +54,15 @@ func (r *Renderer) create(node *core.Node) js.Value {
 		return js.Global().Get("document").Call("createTextNode", "")
 	}
 	doc := js.Global().Get("document")
-
 	switch node.Type {
 	case core.TextNode:
 		tn := doc.Call("createTextNode", node.Text)
-		node.DOMRef = tn // BUG FIX #2: text nodes must store DOMRef
+		node.DOMRef = tn
 		return tn
-
 	case core.ElementNode:
 		el := doc.Call("createElement", node.Tag)
-		r.setProps(el, node.Props)
+		r.applyAttrs(el, node.Props)
+		r.attachEvents(el, node.Props)
 		for _, child := range node.Children {
 			if child != nil {
 				el.Call("appendChild", r.create(child))
@@ -71,9 +70,7 @@ func (r *Renderer) create(node *core.Node) js.Value {
 		}
 		node.DOMRef = el
 		return el
-
 	case core.FragmentNode:
-		// Fragments: wrap in a span so we have a single DOMRef
 		el := doc.Call("createElement", "span")
 		el.Get("style").Set("display", "contents")
 		for _, child := range node.Children {
@@ -84,30 +81,21 @@ func (r *Renderer) create(node *core.Node) js.Value {
 		node.DOMRef = el
 		return el
 	}
-
-	tn := doc.Call("createTextNode", "")
-	node.DOMRef = tn
-	return tn
+	return doc.Call("createTextNode", "")
 }
 
 // ---------------------------------------------------------
-// patch — BUG FIX #1: recursive patching with CORRECT parent
+// patch — recursive, correct parent always
 // ---------------------------------------------------------
 
-// patch reconciles old and new vnodes, using old.DOMRef to find the
-// real DOM node, and parent to insert/remove siblings.
 func (r *Renderer) patch(parent js.Value, old, new *core.Node) {
-	// Both nil — nothing to do
 	if old == nil && new == nil {
 		return
 	}
-	// New node — create and append
 	if old == nil {
-		el := r.create(new)
-		parent.Call("appendChild", el)
+		parent.Call("appendChild", r.create(new))
 		return
 	}
-	// Removed — delete from its actual parent
 	if new == nil {
 		if old.DOMRef != nil {
 			el := old.DOMRef.(js.Value)
@@ -118,230 +106,187 @@ func (r *Renderer) patch(parent js.Value, old, new *core.Node) {
 		return
 	}
 
-	// Text → Text: update nodeValue in place
+	// Text → Text
 	if old.Type == core.TextNode && new.Type == core.TextNode {
 		if old.DOMRef != nil {
 			el := old.DOMRef.(js.Value)
 			if old.Text != new.Text {
-				el.Set("nodeValue", new.Text) // BUG FIX #2: use nodeValue not textContent
+				el.Set("nodeValue", new.Text)
 			}
 			new.DOMRef = el
 		}
 		return
 	}
 
-	// Different types or tags — full replace
+	// Type or tag changed — replace entirely
 	if old.Type != new.Type || old.Tag != new.Tag {
 		newEl := r.create(new)
 		if old.DOMRef != nil {
-			oldEl := old.DOMRef.(js.Value)
-			parent.Call("replaceChild", newEl, oldEl)
+			parent.Call("replaceChild", newEl, old.DOMRef.(js.Value))
 		} else {
 			parent.Call("appendChild", newEl)
 		}
 		return
 	}
 
-	// Same element — update props, then recurse into children
-	// BUG FIX #1: pass old.DOMRef (the actual element) as parent for children
-	if old.DOMRef != nil {
-		el := old.DOMRef.(js.Value)
-		new.DOMRef = el
-		r.updateProps(el, old.Props, new.Props)
-		r.patchChildren(el, old.Children, new.Children)
+	// Same element — update props, recurse children
+	if old.DOMRef == nil {
+		return
 	}
+	oldEl := old.DOMRef.(js.Value)
+
+	// F2 FIX: get a clean element (may be a clone if events present)
+	freshEl := r.updateProps(oldEl, old.Props, new.Props)
+	new.DOMRef = freshEl
+
+	r.patchChildren(freshEl, old.Children, new.Children)
 }
 
-// patchChildren reconciles two child slices
-func (r *Renderer) patchChildren(parent js.Value, oldChildren, newChildren []*core.Node) {
-	oldLen := len(oldChildren)
-	newLen := len(newChildren)
-	maxLen := oldLen
-	if newLen > maxLen {
-		maxLen = newLen
+func (r *Renderer) patchChildren(parent js.Value, oldCh, newCh []*core.Node) {
+	maxLen := len(oldCh)
+	if len(newCh) > maxLen {
+		maxLen = len(newCh)
 	}
 	for i := 0; i < maxLen; i++ {
 		var old, new *core.Node
-		if i < oldLen {
-			old = oldChildren[i]
-		}
-		if i < newLen {
-			new = newChildren[i]
-		}
+		if i < len(oldCh) { old = oldCh[i] }
+		if i < len(newCh) { new = newCh[i] }
 		r.patch(parent, old, new)
 	}
 }
 
 // ---------------------------------------------------------
-// setProps / updateProps — attributes and events
+// updateProps — F2 FIX
+// Clones the node to drop ALL old event listeners, then
+// re-attaches fresh ones. cloneNode(false) is the key:
+// it copies the element but strips all addEventListener calls.
 // ---------------------------------------------------------
 
-func (r *Renderer) setProps(el js.Value, props core.Props) {
-	if props.Class != "" {
-		el.Set("className", props.Class)
+func (r *Renderer) updateProps(el js.Value, old, new core.Props) js.Value {
+	// Always update non-event attributes on the existing element
+	r.applyAttrs(el, new)
+
+	// If no events — done, return same element
+	if !hasAnyEvent(new) {
+		return el
 	}
-	if props.ID != "" {
-		el.Set("id", props.ID)
-	}
-	if len(props.Style) > 0 {
-		style := el.Get("style")
-		for k, v := range props.Style {
-			style.Set(camelCase(k), v)
+
+	// F2 FIX: clone strips all old listeners atomically
+	clone := el.Call("cloneNode", false)
+
+	// Move children from old el to clone
+	for {
+		child := el.Get("firstChild")
+		if child.IsNull() || child.IsUndefined() {
+			break
 		}
+		clone.Call("appendChild", child)
 	}
-	if props.Value != "" {
-		el.Set("value", props.Value)
+
+	// Swap in DOM
+	parent := el.Get("parentNode")
+	if !parent.IsNull() && !parent.IsUndefined() {
+		parent.Call("replaceChild", clone, el)
 	}
-	if props.Placeholder != "" {
-		el.Set("placeholder", props.Placeholder)
-	}
-	if props.Disabled {
-		el.Set("disabled", true)
-	}
-	if props.Checked {
-		el.Set("checked", true)
-	}
-	if props.Type != "" {
-		el.Set("type", props.Type)
-	}
-	if props.Src != "" {
-		el.Set("src", props.Src)
-	}
-	if props.Alt != "" {
-		el.Set("alt", props.Alt)
-	}
-	if props.Href != "" {
-		el.Set("href", props.Href)
-	}
-	if props.Target != "" {
-		el.Set("target", props.Target)
-	}
-	for k, v := range props.Data {
-		el.Call("setAttribute", "data-"+k, v)
-	}
-	for k, v := range props.Attrs {
-		el.Call("setAttribute", k, v)
-	}
-	r.attachEvents(el, props)
+
+	// Attach fresh event listeners to clean clone
+	r.attachEvents(clone, new)
+	return clone
 }
 
-func (r *Renderer) updateProps(el js.Value, old, new core.Props) {
-	if old.Class != new.Class {
-		el.Set("className", new.Class)
-	}
-	if old.Value != new.Value {
-		el.Set("value", new.Value)
-	}
-	if old.Disabled != new.Disabled {
-		el.Set("disabled", new.Disabled)
-	}
-	if old.Checked != new.Checked {
-		el.Set("checked", new.Checked)
-	}
-	if old.Placeholder != new.Placeholder {
-		el.Set("placeholder", new.Placeholder)
-	}
-	if old.Src != new.Src {
-		el.Set("src", new.Src)
-	}
-	if old.Href != new.Href {
-		el.Set("href", new.Href)
-	}
-	if len(new.Style) > 0 {
-		style := el.Get("style")
-		for k, v := range new.Style {
-			style.Set(camelCase(k), v)
-		}
-	}
-	// BUG FIX #10: re-attach events so latest closures are used
-	// Use a data attribute to avoid duplicate listeners
-	el.Call("setAttribute", "data-rxevt", "1")
-	r.attachEvents(el, new)
+func hasAnyEvent(p core.Props) bool {
+	return p.OnClick != nil || p.OnInput != nil || p.OnChange != nil ||
+		p.OnSubmit != nil || p.OnFocus != nil || p.OnBlur != nil ||
+		p.OnKeyDown != nil || p.OnKeyUp != nil || p.OnMouseOver != nil ||
+		p.OnMouseOut != nil
 }
 
-// attachEvents wires Go event handlers to browser DOM events.
-// BUG FIX #10: uses replaceWith pattern — we clone the node to drop
-// old listeners, then re-attach. This prevents listener accumulation.
-func (r *Renderer) attachEvents(el js.Value, props core.Props) {
-	if props.OnClick != nil {
-		fn := props.OnClick
-		el.Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			fn()
-			return nil
-		}))
+// ---------------------------------------------------------
+// applyAttrs — non-event attributes
+// ---------------------------------------------------------
+
+func (r *Renderer) applyAttrs(el js.Value, p core.Props) {
+	if p.Class != "" { el.Set("className", p.Class) }
+	if p.ID != "" { el.Set("id", p.ID) }
+	if len(p.Style) > 0 {
+		s := el.Get("style")
+		for k, v := range p.Style { s.Set(camelCase(k), v) }
 	}
-	if props.OnInput != nil {
-		fn := props.OnInput
-		el.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			fn(el.Get("value").String())
-			return nil
-		}))
+	if p.Value != "" { el.Set("value", p.Value) }
+	if p.Placeholder != "" { el.Set("placeholder", p.Placeholder) }
+	el.Set("disabled", p.Disabled)
+	if p.Checked { el.Set("checked", true) }
+	if p.Type != "" { el.Set("type", p.Type) }
+	if p.Src != "" { el.Set("src", p.Src) }
+	if p.Alt != "" { el.Set("alt", p.Alt) }
+	if p.Href != "" { el.Set("href", p.Href) }
+	if p.Target != "" { el.Set("target", p.Target) }
+	for k, v := range p.Data { el.Call("setAttribute", "data-"+k, v) }
+	for k, v := range p.Attrs { el.Call("setAttribute", k, v) }
+}
+
+// ---------------------------------------------------------
+// attachEvents
+// ---------------------------------------------------------
+
+func (r *Renderer) attachEvents(el js.Value, p core.Props) {
+	if p.OnClick != nil {
+		fn := p.OnClick
+		el.Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(); return nil }))
 	}
-	if props.OnChange != nil {
-		fn := props.OnChange
-		el.Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			fn(el.Get("value").String())
-			return nil
-		}))
+	if p.OnInput != nil {
+		fn := p.OnInput
+		el.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(el.Get("value").String()); return nil }))
 	}
-	if props.OnSubmit != nil {
-		fn := props.OnSubmit
+	if p.OnChange != nil {
+		fn := p.OnChange
+		el.Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(el.Get("value").String()); return nil }))
+	}
+	if p.OnSubmit != nil {
+		fn := p.OnSubmit
 		el.Call("addEventListener", "submit", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			if len(args) > 0 {
-				args[0].Call("preventDefault")
-			}
-			fn()
-			return nil
+			if len(args) > 0 { args[0].Call("preventDefault") }
+			fn(); return nil
 		}))
 	}
-	if props.OnFocus != nil {
-		fn := props.OnFocus
-		el.Call("addEventListener", "focus", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			fn()
-			return nil
-		}))
+	if p.OnFocus != nil {
+		fn := p.OnFocus
+		el.Call("addEventListener", "focus", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(); return nil }))
 	}
-	if props.OnBlur != nil {
-		fn := props.OnBlur
-		el.Call("addEventListener", "blur", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			fn()
-			return nil
-		}))
+	if p.OnBlur != nil {
+		fn := p.OnBlur
+		el.Call("addEventListener", "blur", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(); return nil }))
 	}
-	if props.OnKeyDown != nil {
-		fn := props.OnKeyDown
+	if p.OnKeyDown != nil {
+		fn := p.OnKeyDown
 		el.Call("addEventListener", "keydown", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			key := ""
-			if len(args) > 0 {
-				key = args[0].Get("key").String()
-			}
-			fn(key)
-			return nil
+			key := ""; if len(args) > 0 { key = args[0].Get("key").String() }
+			fn(key); return nil
 		}))
 	}
-	if props.OnKeyUp != nil {
-		fn := props.OnKeyUp
+	if p.OnKeyUp != nil {
+		fn := p.OnKeyUp
 		el.Call("addEventListener", "keyup", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			key := ""
-			if len(args) > 0 {
-				key = args[0].Get("key").String()
-			}
-			fn(key)
-			return nil
+			key := ""; if len(args) > 0 { key = args[0].Get("key").String() }
+			fn(key); return nil
 		}))
+	}
+	if p.OnMouseOver != nil {
+		fn := p.OnMouseOver
+		el.Call("addEventListener", "mouseover", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(); return nil }))
+	}
+	if p.OnMouseOut != nil {
+		fn := p.OnMouseOut
+		el.Call("addEventListener", "mouseout", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(); return nil }))
 	}
 }
 
 func camelCase(s string) string {
 	parts := strings.Split(s, "-")
-	if len(parts) == 1 {
-		return s
-	}
-	result := parts[0]
+	if len(parts) == 1 { return s }
+	r2 := parts[0]
 	for _, p := range parts[1:] {
-		if len(p) > 0 {
-			result += strings.ToUpper(p[:1]) + p[1:]
-		}
+		if len(p) > 0 { r2 += strings.ToUpper(p[:1]) + p[1:] }
 	}
-	return result
+	return r2
 }

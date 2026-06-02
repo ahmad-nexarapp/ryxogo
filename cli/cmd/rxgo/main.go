@@ -437,8 +437,8 @@ func cmdAI() {
 func buildWASM(outDir string) error {
 	os.MkdirAll(outDir, 0755)
 
-	// Build the WASM binary
-	cmd := exec.Command("go", "build", "-o", filepath.Join(outDir, "app.wasm"), ".")
+	// Build the WASM binary — -ldflags "-s -w" strips debug symbols (~30% smaller)
+	cmd := exec.Command("go", "build", "-ldflags", "-s -w", "-o", filepath.Join(outDir, "app.wasm"), ".")
 	cmd.Env = append(os.Environ(),
 		"GOARCH=wasm",
 		"GOOS=js",
@@ -645,28 +645,45 @@ func (p *%s) Render() *rx.Node {
 }
 
 func generateStore(name string) {
-	storeName := name + "Store"
-	varName := strings.ToLower(name[:1]) + name[1:]
+	storeName := name + "State"
+	varName := strings.ToLower(name[:1]) + name[1:] + "Store"
 	path := filepath.Join("stores", strings.ToLower(name)+".go")
 	content := fmt.Sprintf(`package stores
 
 import rx "github.com/ahmad-nexarapp/ryxogo"
 
+// %s holds global %s state
 type %s struct {
-	// Define store fields here
+	// Add fields here
+	// Example:
+	// User  *User
+	// Token string
 }
 
+// %s is the global %s store — accessible from any component
 var %s = rx.NewStore(&%s{})
 
-// Actions
-func Set%sField(value string) {
+// Example actions:
+
+// Set%sUser updates the user field
+// func Set%sUser(user *User) {
+// 	rx.UpdateStore(%s, func(s *%s) {
+// 		s.User = user
+// 	})
+// }
+
+// Reset%s resets the store to its initial state
+func Reset%s() {
 	rx.UpdateStore(%s, func(s *%s) {
-		// s.Field = value
+		*s = %s{}
 	})
 }
-`, storeName, varName, storeName, name, varName, storeName)
+`, storeName, name, storeName, varName, name, varName, storeName,
+		name, name, varName, storeName, name, name, varName, storeName, storeName)
 
 	writeGenerated(path, content, "store", storeName)
+	fmt.Printf("  %s Use in any component:\n", gray("→"))
+	fmt.Printf("    state := rx.GetStore(stores.%s)\n\n", varName)
 }
 
 func generateType(name string) {

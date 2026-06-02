@@ -1,21 +1,25 @@
 //go:build wasm
 
-// router_wasm.go — connects RyxoGo router to browser history API
+// router_wasm.go — browser history API integration.
+// F6 FIX: uses replaceState when navigating to same path.
 package router
 
 import "syscall/js"
 
-// navigateTo pushes a new entry to browser history
 func navigateTo(path string) {
-	js.Global().Get("history").Call("pushState", nil, "", path)
+	current := js.Global().Get("location").Get("pathname").String()
+	if current == path {
+		// F6 FIX: replaceState instead of pushState to avoid duplicate history entries
+		js.Global().Get("history").Call("replaceState", nil, "", path)
+	} else {
+		js.Global().Get("history").Call("pushState", nil, "", path)
+	}
 }
 
-// goBack calls browser history.back()
 func goBack() {
 	js.Global().Get("history").Call("back")
 }
 
-// goForward calls browser history.forward()
 func goForward() {
 	js.Global().Get("history").Call("forward")
 }

@@ -5,6 +5,7 @@ package ryxogo
 import (
 	"syscall/js"
 
+	"github.com/ahmad-nexarapp/ryxogo/core"
 	"github.com/ahmad-nexarapp/ryxogo/renderer"
 	"github.com/ahmad-nexarapp/ryxogo/router"
 	"github.com/ahmad-nexarapp/ryxogo/signal"
@@ -12,6 +13,11 @@ import (
 
 func run(a *App) {
 	var cleanup func()
+
+	// F5 FIX: wire core.Navigate so rx.Link works without import cycle
+	core.Navigate = func(path string) {
+		a.router.Navigate(path)
+	}
 
 	a.router.OnChange(func(route *router.Route, params, query map[string]string) {
 		if cleanup != nil {
