@@ -1,5 +1,5 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+# Build and test RyxoGo.
+# Docs: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
 
 name: Go
 
@@ -17,12 +17,21 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
-        go-version: '1.20'
+        go-version: '1.22'
+        # No go.sum (RyxoGo has no external deps) — disable the module cache
+        # to avoid the "Dependencies file is not found" warning.
+        cache: false
 
-    - name: Build
+    - name: Build (native)
       run: go build -v ./...
+
+    - name: Build (WebAssembly)
+      run: GOOS=js GOARCH=wasm go build -v ./...
 
     - name: Test
       run: go test -v ./...
+
+    - name: Vet
+      run: go vet ./...
