@@ -314,10 +314,16 @@ func cmdServe() {
 // rxgo build
 // ---------------------------------------------------------
 
+// cmdBuild builds for production
 func cmdBuild() {
 	outDir := "dist"
-	if len(os.Args) >= 3 {
-		outDir = os.Args[2]
+	compress := false
+	for _, a := range os.Args[2:] {
+		if a == "--compress" || a == "-z" {
+			compress = true
+		} else if !strings.HasPrefix(a, "-") {
+			outDir = a
+		}
 	}
 
 	fmt.Printf("\n  %s Building for production...\n\n", cyan("⚡"))
@@ -326,19 +332,33 @@ func cmdBuild() {
 		fatal("Build failed: " + err.Error())
 	}
 
+	if compress {
+		compressWASM(outDir)
+	}
+
 	// Get file sizes
 	wasmInfo, _ := os.Stat(filepath.Join(outDir, "app.wasm"))
 	wasmSize := ""
+	gzipNote := ""
 	if wasmInfo != nil {
-		wasmSize = fmt.Sprintf("%.1f KB", float64(wasmInfo.Size())/1024)
+		kb := float64(wasmInfo.Size()) / 1024
+		mb := kb / 1024
+		if mb >= 1 {
+			wasmSize = fmt.Sprintf("%.1f MB", mb)
+		} else {
+			wasmSize = fmt.Sprintf("%.0f KB", kb)
+		}
+		// WASM compresses very well — show estimated gzip size
+		gzipNote = fmt.Sprintf("~%.0f KB gzipped", kb*0.3)
 	}
 
 	fmt.Printf("  %s Build complete!\n\n", green("✓"))
 	fmt.Printf("  %s\n", gray("Output:"))
-	fmt.Printf("    dist/app.wasm      %s\n", gray(wasmSize))
+	fmt.Printf("    dist/app.wasm      %s  (%s)\n", gray(wasmSize), gray(gzipNote))
 	fmt.Printf("    dist/wasm_exec.js\n")
 	fmt.Printf("    dist/index.html\n\n")
-	fmt.Printf("  %s\n\n", gray("Deploy the dist/ folder to any static host"))
+	fmt.Printf("  %s Deploy the dist/ folder to any static host\n", gray("→"))
+	fmt.Printf("  %s Enable gzip/brotli on your server for best load times\n\n", gray("→"))
 }
 
 // cmdMCP starts the MCP server
@@ -493,6 +513,35 @@ func buildWASM(outDir string) error {
 	return nil
 }
 
+// compressWASM gzips the WASM binary for servers that support pre-compressed files
+func compressWASM(outDir string) {
+	wasmPath := filepath.Join(outDir, "app.wasm")
+	gzPath := wasmPath + ".gz"
+
+	cmd := exec.Command("gzip", "-k", "-9", "-f", wasmPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		// gzip not available — try Go's compress/gzip
+		fmt.Printf("  %s gzip not found — skipping compression\n", gray("→"))
+		return
+	}
+
+	origInfo, _ := os.Stat(wasmPath)
+	gzInfo, _ := os.Stat(gzPath)
+	if origInfo != nil && gzInfo != nil {
+		ratio := float64(gzInfo.Size()) / float64(origInfo.Size()) * 100
+		fmt.Printf("  %s Compressed: %.1f MB → %.0f KB (%.0f%%)\n",
+			green("✓"),
+			float64(origInfo.Size())/1024/1024,
+			float64(gzInfo.Size())/1024,
+			ratio,
+		)
+		fmt.Printf("  %s Configure your server to serve app.wasm.gz with Content-Encoding: gzip\n\n", gray("→"))
+	}
+}
+
+// watchAndRebuild watches for file changes and rebuilds
 func watchAndRebuild(outDir string) {
 	// Simple file watcher — checks for changes every second
 	modTimes := map[string]time.Time{}

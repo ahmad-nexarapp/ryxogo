@@ -86,7 +86,15 @@ func Computed[T any](fn func() T) *signal.Computed[T] {
 	return signal.Derive(fn)
 }
 
-// Watch runs a function whenever its signal dependencies change.
+// Persist creates a signal backed by localStorage.
+// Works exactly like Use() but survives page refresh.
+//
+//	theme := rx.Persist("theme", "light")
+//	token := rx.Persist("auth_token", "")
+//	theme.Set("dark")  // saved to localStorage automatically
+func Persist[T any](key string, defaultVal T) *signal.PersistSignal[T] {
+	return signal.NewPersist(key, defaultVal)
+}
 // RyxoGo automatically detects which signals the function reads.
 //
 //	ryxogo.Watch(func() {
@@ -157,6 +165,24 @@ var (
 	Nodes    = core.Nodes
 	El       = core.El
 )
+
+// Bind creates Props for a controlled input from a value + setter.
+// For string signals, BindString is simpler.
+//
+//	rx.Input(rx.Bind(p.name.Val(), func(v string) { p.name.Set(v) }, rx.Props{Class: "..."}))
+var Bind = core.Bind
+
+// BindString creates Props for a text input two-way bound to a string signal.
+// Replaces manual Value + OnInput boilerplate entirely.
+//
+//	// Old way:
+//	rx.Input(rx.Props{Value: p.name.Val(), OnInput: func(v string) { p.name.Set(v) }})
+//
+//	// New way:
+//	rx.Input(rx.BindString(p.name, rx.Props{Placeholder: "Your name"}))
+func BindString[T interface{ Val() string; Set(string) }](sig T, extra Props) Props {
+	return core.BindString(sig, extra)
+}
 
 // Link renders a client-side navigation link — no page reload.
 //
