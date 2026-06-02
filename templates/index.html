@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{.AppName}}</title>
+
+  <!-- Tailwind CSS CDN (swap for local build in production) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- RyxoGo WASM loader -->
+  <style>
+    #ryxogo-loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: system-ui, sans-serif;
+      color: #6b7280;
+      font-size: 14px;
+      gap: 10px;
+    }
+    .ryxogo-spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid #e5e7eb;
+      border-top-color: #4f46e5;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+  <!-- RyxoGo mounts your app here -->
+  <div id="app">
+    <div id="ryxogo-loading">
+      <div class="ryxogo-spinner"></div>
+      <span>Loading...</span>
+    </div>
+  </div>
+
+  <!-- Go's WASM bridge — required -->
+  <script src="/wasm_exec.js"></script>
+
+  <script>
+    // Load and run the RyxoGo WASM app
+    const go = new Go();
+
+    WebAssembly.instantiateStreaming(fetch('/app.wasm'), go.importObject)
+      .then(result => {
+        // Remove loading spinner
+        const loading = document.getElementById('ryxogo-loading');
+        if (loading) loading.remove();
+
+        // Run the Go WASM module
+        go.run(result.instance);
+      })
+      .catch(err => {
+        document.getElementById('app').innerHTML = `
+          <div style="padding:2rem;font-family:sans-serif;color:#dc2626">
+            <h2>Failed to load app</h2>
+            <pre style="font-size:12px;color:#666">${err}</pre>
+          </div>
+        `;
+        console.error('RyxoGo WASM load error:', err);
+      });
+  </script>
+
+</body>
+</html>

@@ -34,9 +34,9 @@ type CounterPage struct {
 	rx.Page
 
 	// State — declared in Setup(), used in Render()
-	count   *rx.Signal[int]     // local count
-	doubled *rx.Computed[int]   // auto-updates when count changes
-	name    *rx.Signal[string]  // input binding
+	count   interface{}  // *signal.Signal[int]
+	doubled interface{}  // *signal.Computed[int]
+	name    interface{}  // *signal.Signal[string]
 }
 
 func (p *CounterPage) Setup() {
