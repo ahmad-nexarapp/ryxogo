@@ -293,6 +293,16 @@ func (a *App) MountTo(id string) *App {
 	return a
 }
 
+// BasePath sets a URL prefix for subpath deploys.
+// Use when your app is served at example.com/myapp/ instead of example.com/
+//
+//	app.BasePath("/myapp")
+//	// Now routes /about → matched by browser path /myapp/about
+func (a *App) BasePath(base string) *App {
+	a.router.SetBasePath(base)
+	return a
+}
+
 // Route registers a URL pattern with a page.
 // Accepts either a component instance OR a factory function — both work:
 //

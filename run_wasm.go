@@ -14,12 +14,18 @@ import (
 func run(a *App) {
 	var cleanup func()
 
-	// F5 FIX: wire core.Navigate so rx.Link works without import cycle
+	// Wire core.Navigate so rx.Link works without import cycle
 	core.Navigate = func(path string) {
 		a.router.Navigate(path)
 	}
 
+	// Wire core.CurrentPath so rx.Link can show active state
+	core.CurrentPath = func() string {
+		return a.router.Current()
+	}
+
 	a.router.OnChange(func(route *router.Route, params, query map[string]string) {
+		// Call OnUnmount on previous page before switching
 		if cleanup != nil {
 			cleanup()
 			cleanup = nil
@@ -38,10 +44,17 @@ func run(a *App) {
 		r := renderer.New(a.rootID, c)
 
 		// page holds mutable render state
-		page := &pageState{r: r}
+		page := &pageState{r: r, comp: c}
 		page.init()
 
-		cleanup = func() { page.stop() }
+		prevComp := c
+		cleanup = func() {
+			page.stop()
+			// Call OnUnmount lifecycle hook
+			if u, ok := prevComp.(interface{ OnUnmount() }); ok {
+				u.OnUnmount()
+			}
+		}
 
 		if m, ok := c.(interface{ OnMount() }); ok {
 			m.OnMount()
@@ -64,9 +77,10 @@ func run(a *App) {
 // pageState holds reactive rendering state for one mounted page.
 // Separating it from the closure fixes all self-reference issues.
 type pageState struct {
-	r            *renderer.Renderer
-	stopTracking func()
-	rafPending   bool
+	r          *renderer.Renderer
+	comp       core.Component
+	stopFn     func()
+	rafPending bool
 }
 
 func (p *pageState) init() {
@@ -77,9 +91,9 @@ func (p *pageState) init() {
 }
 
 func (p *pageState) stop() {
-	if p.stopTracking != nil {
-		p.stopTracking()
-		p.stopTracking = nil
+	if p.stopFn != nil {
+		p.stopFn()
+		p.stopFn = nil
 	}
 }
 
@@ -99,15 +113,15 @@ func (p *pageState) scheduleUpdate() {
 
 func (p *pageState) render(mount bool) {
 	// Stop old subscriptions so we don't accumulate stale listeners
-	if p.stopTracking != nil {
-		p.stopTracking()
-		p.stopTracking = nil
+	if p.stopFn != nil {
+		p.stopFn()
+		p.stopFn = nil
 	}
 
 	// Run render inside tracking context.
 	// Any signal.Val() called during render auto-subscribes.
 	// When a subscribed signal changes, scheduleUpdate fires.
-	p.stopTracking = signal.Track(
+	p.stopFn = signal.Track(
 		func() {
 			if mount {
 				p.r.Mount()

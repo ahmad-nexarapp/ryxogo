@@ -1,12 +1,11 @@
 //go:build wasm
 
-// Package renderer bridges RyxoGo virtual DOM to real browser DOM.
+// Package renderer — production-hardened virtual DOM renderer for RyxoGo.
 //
-// F1 fix (upstream signal): Computed clears deps before recompute.
-// F2 fix (this file): Event listeners never stack.
-//   On every patch of an element with events, we cloneNode(false)
-//   which strips ALL old addEventListener listeners in one call,
-//   then re-attach fresh ones. Zero accumulation, zero leaks.
+// Fixes in this version:
+//   Link preventDefault: OnClick on <a> calls event.preventDefault()
+//   js.FuncOf leak: all funcs tracked in funcStore, released on node removal
+//   cloneNode F2: event listeners never stack across re-renders
 package renderer
 
 import (
@@ -33,16 +32,20 @@ func New(mountID string, comp core.Component) *Renderer {
 }
 
 func (r *Renderer) Mount() {
-	newTree := r.comp.Render()
-	r.rootEl.Set("innerHTML", "")
-	r.rootEl.Call("appendChild", r.create(newTree))
-	r.rootNode = newTree
+	safeRender(r.rootEl, func() {
+		newTree := r.comp.Render()
+		r.rootEl.Set("innerHTML", "")
+		r.rootEl.Call("appendChild", r.create(newTree))
+		r.rootNode = newTree
+	})
 }
 
 func (r *Renderer) Update() {
-	newTree := r.comp.Render()
-	r.patch(r.rootEl, r.rootNode, newTree)
-	r.rootNode = newTree
+	safeRender(r.rootEl, func() {
+		newTree := r.comp.Render()
+		r.patch(r.rootEl, r.rootNode, newTree)
+		r.rootNode = newTree
+	})
 }
 
 // ---------------------------------------------------------
@@ -85,7 +88,7 @@ func (r *Renderer) create(node *core.Node) js.Value {
 }
 
 // ---------------------------------------------------------
-// patch — recursive, correct parent always
+// patch — recursive, correct parent, releases old funcs
 // ---------------------------------------------------------
 
 func (r *Renderer) patch(parent js.Value, old, new *core.Node) {
@@ -99,9 +102,8 @@ func (r *Renderer) patch(parent js.Value, old, new *core.Node) {
 	if new == nil {
 		if old.DOMRef != nil {
 			el := old.DOMRef.(js.Value)
-			if !el.IsNull() && !el.IsUndefined() {
-				parent.Call("removeChild", el)
-			}
+			releaseNode(old.DOMRef)      // FIX: free js.Func before removal
+			parent.Call("removeChild", el)
 		}
 		return
 	}
@@ -118,11 +120,13 @@ func (r *Renderer) patch(parent js.Value, old, new *core.Node) {
 		return
 	}
 
-	// Type or tag changed — replace entirely
+	// Different type or tag — full replace
 	if old.Type != new.Type || old.Tag != new.Tag {
 		newEl := r.create(new)
 		if old.DOMRef != nil {
-			parent.Call("replaceChild", newEl, old.DOMRef.(js.Value))
+			oldEl := old.DOMRef.(js.Value)
+			releaseNode(old.DOMRef)      // FIX: free js.Func before replace
+			parent.Call("replaceChild", newEl, oldEl)
 		} else {
 			parent.Call("appendChild", newEl)
 		}
@@ -134,11 +138,8 @@ func (r *Renderer) patch(parent js.Value, old, new *core.Node) {
 		return
 	}
 	oldEl := old.DOMRef.(js.Value)
-
-	// F2 FIX: get a clean element (may be a clone if events present)
 	freshEl := r.updateProps(oldEl, old.Props, new.Props)
 	new.DOMRef = freshEl
-
 	r.patchChildren(freshEl, old.Children, new.Children)
 }
 
@@ -156,40 +157,30 @@ func (r *Renderer) patchChildren(parent js.Value, oldCh, newCh []*core.Node) {
 }
 
 // ---------------------------------------------------------
-// updateProps — F2 FIX
-// Clones the node to drop ALL old event listeners, then
-// re-attaches fresh ones. cloneNode(false) is the key:
-// it copies the element but strips all addEventListener calls.
+// updateProps — F2: cloneNode strips old listeners
 // ---------------------------------------------------------
 
 func (r *Renderer) updateProps(el js.Value, old, new core.Props) js.Value {
-	// Always update non-event attributes on the existing element
 	r.applyAttrs(el, new)
-
-	// If no events — done, return same element
 	if !hasAnyEvent(new) {
 		return el
 	}
+	// Release old funcs before cloning
+	releaseNode(el)
 
-	// F2 FIX: clone strips all old listeners atomically
+	// cloneNode(false) drops all addEventListener listeners atomically
 	clone := el.Call("cloneNode", false)
-
-	// Move children from old el to clone
+	// Move children
 	for {
 		child := el.Get("firstChild")
-		if child.IsNull() || child.IsUndefined() {
-			break
-		}
+		if child.IsNull() || child.IsUndefined() { break }
 		clone.Call("appendChild", child)
 	}
-
 	// Swap in DOM
 	parent := el.Get("parentNode")
 	if !parent.IsNull() && !parent.IsUndefined() {
 		parent.Call("replaceChild", clone, el)
 	}
-
-	// Attach fresh event listeners to clean clone
 	r.attachEvents(clone, new)
 	return clone
 }
@@ -226,58 +217,81 @@ func (r *Renderer) applyAttrs(el js.Value, p core.Props) {
 }
 
 // ---------------------------------------------------------
-// attachEvents
+// attachEvents — all funcs tracked in funcStore for cleanup
 // ---------------------------------------------------------
 
 func (r *Renderer) attachEvents(el js.Value, p core.Props) {
 	if p.OnClick != nil {
 		fn := p.OnClick
-		el.Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(); return nil }))
+		isAnchor := el.Get("tagName").String() == "A"
+		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
+			// Fix: preventDefault on <a> prevents browser from following href
+			// This stops the WASM-reload bug on every Link click
+			if isAnchor && len(args) > 0 {
+				args[0].Call("preventDefault")
+			}
+			fn()
+			return nil
+		})
+		el.Call("addEventListener", "click", f)
 	}
 	if p.OnInput != nil {
 		fn := p.OnInput
-		el.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(el.Get("value").String()); return nil }))
+		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
+			fn(el.Get("value").String()); return nil
+		})
+		el.Call("addEventListener", "input", f)
 	}
 	if p.OnChange != nil {
 		fn := p.OnChange
-		el.Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(el.Get("value").String()); return nil }))
+		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
+			fn(el.Get("value").String()); return nil
+		})
+		el.Call("addEventListener", "change", f)
 	}
 	if p.OnSubmit != nil {
 		fn := p.OnSubmit
-		el.Call("addEventListener", "submit", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
 			if len(args) > 0 { args[0].Call("preventDefault") }
 			fn(); return nil
-		}))
+		})
+		el.Call("addEventListener", "submit", f)
 	}
 	if p.OnFocus != nil {
 		fn := p.OnFocus
-		el.Call("addEventListener", "focus", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(); return nil }))
+		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} { fn(); return nil })
+		el.Call("addEventListener", "focus", f)
 	}
 	if p.OnBlur != nil {
 		fn := p.OnBlur
-		el.Call("addEventListener", "blur", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(); return nil }))
+		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} { fn(); return nil })
+		el.Call("addEventListener", "blur", f)
 	}
 	if p.OnKeyDown != nil {
 		fn := p.OnKeyDown
-		el.Call("addEventListener", "keydown", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
 			key := ""; if len(args) > 0 { key = args[0].Get("key").String() }
 			fn(key); return nil
-		}))
+		})
+		el.Call("addEventListener", "keydown", f)
 	}
 	if p.OnKeyUp != nil {
 		fn := p.OnKeyUp
-		el.Call("addEventListener", "keyup", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
 			key := ""; if len(args) > 0 { key = args[0].Get("key").String() }
 			fn(key); return nil
-		}))
+		})
+		el.Call("addEventListener", "keyup", f)
 	}
 	if p.OnMouseOver != nil {
 		fn := p.OnMouseOver
-		el.Call("addEventListener", "mouseover", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(); return nil }))
+		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} { fn(); return nil })
+		el.Call("addEventListener", "mouseover", f)
 	}
 	if p.OnMouseOut != nil {
 		fn := p.OnMouseOut
-		el.Call("addEventListener", "mouseout", js.FuncOf(func(this js.Value, args []js.Value) interface{} { fn(); return nil }))
+		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} { fn(); return nil })
+		el.Call("addEventListener", "mouseout", f)
 	}
 }
 
