@@ -1,0 +1,64 @@
+/* RyxoGo UI component library styles */
+
+/* Buttons */
+.rxui-btn { display:inline-flex; align-items:center; justify-content:center; border:none; border-radius:8px; font-weight:500; cursor:pointer; transition:all .15s; font-family:inherit; }
+.rxui-btn:disabled { opacity:.5; cursor:not-allowed; }
+.rxui-btn-sm { padding:6px 12px; font-size:13px; }
+.rxui-btn-md { padding:9px 18px; font-size:14px; }
+.rxui-btn-lg { padding:12px 24px; font-size:16px; }
+.rxui-btn-full { width:100%; }
+.rxui-btn-primary { background:#4f46e5; color:#fff; }
+.rxui-btn-primary:hover:not(:disabled) { background:#4338ca; }
+.rxui-btn-secondary { background:#f3f4f6; color:#374151; }
+.rxui-btn-secondary:hover:not(:disabled) { background:#e5e7eb; }
+.rxui-btn-danger { background:#dc2626; color:#fff; }
+.rxui-btn-danger:hover:not(:disabled) { background:#b91c1c; }
+.rxui-btn-ghost { background:transparent; color:#4f46e5; }
+.rxui-btn-ghost:hover:not(:disabled) { background:#eef2ff; }
+
+/* Cards */
+.rxui-card { background:#fff; border:1px solid #e5e7eb; border-radius:12px; overflow:hidden; }
+.rxui-card-header { padding:16px 20px; border-bottom:1px solid #f3f4f6; }
+.rxui-card-title { margin:0; font-size:16px; font-weight:600; color:#111827; }
+.rxui-card-subtitle { margin:4px 0 0; font-size:13px; color:#6b7280; }
+.rxui-card-body { padding:20px; }
+
+/* Inputs */
+.rxui-field { display:flex; flex-direction:column; gap:6px; margin-bottom:16px; }
+.rxui-label { font-size:13px; font-weight:500; color:#374151; }
+.rxui-input { padding:9px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:14px; font-family:inherit; outline:none; transition:border-color .15s,box-shadow .15s; }
+.rxui-input:focus { border-color:#4f46e5; box-shadow:0 0 0 3px rgba(79,70,229,.15); }
+.rxui-input-error { border-color:#dc2626; }
+.rxui-error-text { font-size:12px; color:#dc2626; }
+
+/* Badges */
+.rxui-badge { display:inline-block; padding:2px 10px; border-radius:9999px; font-size:12px; font-weight:500; }
+.rxui-badge-success { background:#dcfce7; color:#166534; }
+.rxui-badge-warning { background:#fef3c7; color:#92400e; }
+.rxui-badge-danger { background:#fee2e2; color:#991b1b; }
+.rxui-badge-info { background:#dbeafe; color:#1e40af; }
+.rxui-badge-neutral { background:#f3f4f6; color:#374151; }
+
+/* Alerts */
+.rxui-alert { padding:12px 16px; border-radius:8px; font-size:14px; display:flex; flex-direction:column; gap:4px; }
+.rxui-alert-title { font-weight:600; }
+.rxui-alert-success { background:#dcfce7; color:#166534; }
+.rxui-alert-warning { background:#fef3c7; color:#92400e; }
+.rxui-alert-danger { background:#fee2e2; color:#991b1b; }
+.rxui-alert-info { background:#dbeafe; color:#1e40af; }
+
+/* Spinner */
+.rxui-spinner { width:24px; height:24px; border:3px solid #e5e7eb; border-top-color:#4f46e5; border-radius:50%; animation:rxui-spin .6s linear infinite; }
+@keyframes rxui-spin { to { transform:rotate(360deg); } }
+
+/* Modal */
+.rxui-modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:1000; }
+.rxui-modal { background:#fff; border-radius:12px; max-width:500px; width:90%; max-height:85vh; overflow:auto; }
+.rxui-modal-header { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid #f3f4f6; }
+.rxui-modal-title { margin:0; font-size:16px; font-weight:600; }
+.rxui-modal-close { background:none; border:none; font-size:24px; cursor:pointer; color:#6b7280; line-height:1; }
+.rxui-modal-body { padding:20px; }
+
+/* Layout */
+.rxui-stack { display:flex; flex-direction:column; }
+.rxui-row { display:flex; flex-direction:row; align-items:center; }

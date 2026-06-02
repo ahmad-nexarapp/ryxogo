@@ -112,19 +112,16 @@ func (p *pageState) scheduleUpdate() {
 }
 
 func (p *pageState) render(mount bool) {
-	// Stop old subscriptions so we don't accumulate stale listeners
 	if p.stopFn != nil {
 		p.stopFn()
 		p.stopFn = nil
 	}
 
-	// Run render inside tracking context.
-	// Any signal.Val() called during render auto-subscribes.
-	// When a subscribed signal changes, scheduleUpdate fires.
 	p.stopFn = signal.Track(
 		func() {
 			if mount {
-				p.r.Mount()
+				// Hydrate if SSR content exists, otherwise fresh mount
+				p.r.Hydrate()
 			} else {
 				p.r.Update()
 			}
