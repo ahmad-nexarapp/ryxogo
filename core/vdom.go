@@ -28,7 +28,8 @@ type Node struct {
 	Key        string            // for efficient list diffing
 	Component  Component         // for ComponentNode
 	DOMRef     interface{}       // reference to real DOM element (js.Value in WASM)
-	reactive   *ReactiveText     // fine-grained binding; nil for static text nodes
+	reactive   *ReactiveText     // fine-grained text binding; nil for static text nodes
+	bindings   *reactiveBindings // fine-grained attr/style/show bindings; nil if none
 }
 
 // Reactive returns the node's fine-grained binding, or nil if static.

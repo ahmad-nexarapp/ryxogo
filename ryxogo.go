@@ -178,6 +178,19 @@ var (
 //	rx.BindText(func() string { return strconv.Itoa(p.count.Val()) })
 var BindText = core.BindText
 
+// Bindings starts a fine-grained binding chain for an element — reactive
+// class, attributes, styles, and visibility that update WITHOUT re-running
+// Render(). Only the bound attribute/visibility changes on the element.
+//
+//	rx.Bindings().
+//	    BindClass(func() string {
+//	        if p.active.Val() { return "tab active" }
+//	        return "tab"
+//	    }).
+//	    BindShow(func() bool { return p.visible.Val() }).
+//	    On(rx.Div(rx.Props{}, children...))
+var Bindings = core.Bindings
+
 // Bind creates Props for a controlled input from a value + setter.
 // For string signals, BindString is simpler.
 //

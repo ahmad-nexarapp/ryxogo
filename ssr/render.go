@@ -62,6 +62,11 @@ func renderNode(sb *strings.Builder, node *core.Node) {
 		sb.WriteString("<")
 		sb.WriteString(node.Tag)
 		renderAttrs(sb, node.Props)
+		// Fine-grained bindings: render their initial computed values into
+		// the server HTML so the page is correct before hydration.
+		if node.HasBindings() {
+			renderBindings(sb, node.BindingSet())
+		}
 		if voidElements[node.Tag] {
 			sb.WriteString("/>")
 			return
@@ -73,6 +78,57 @@ func renderNode(sb *strings.Builder, node *core.Node) {
 		sb.WriteString("</")
 		sb.WriteString(node.Tag)
 		sb.WriteString(">")
+	}
+}
+
+// renderBindings writes the initial computed values of fine-grained
+// attribute/style/visibility bindings into the server-rendered HTML.
+func renderBindings(sb *strings.Builder, b *core.BindingSetView) {
+	styleParts := map[string]string{}
+	for _, attr := range b.Attrs() {
+		if attr.Compute == nil {
+			continue
+		}
+		val := attr.Compute()
+		switch {
+		case attr.Name == "class":
+			fmt.Fprintf(sb, ` class="%s"`, html.EscapeString(val))
+		case attr.Name == "disabled":
+			if val == "true" {
+				sb.WriteString(" disabled")
+			}
+		case attr.Name == "checked":
+			if val == "true" {
+				sb.WriteString(" checked")
+			}
+		case len(attr.Name) > 6 && attr.Name[:6] == "style:":
+			styleParts[attr.Name[6:]] = val
+		default:
+			fmt.Fprintf(sb, ` %s="%s"`, attr.Name, html.EscapeString(val))
+		}
+	}
+	// Visibility: render display:none into the initial style if hidden
+	hidden := false
+	if show := b.Show(); show != nil && show.Compute != nil {
+		hidden = !show.Compute()
+	}
+	if len(styleParts) > 0 || hidden {
+		sb.WriteString(` style="`)
+		first := true
+		for prop, val := range styleParts {
+			if !first {
+				sb.WriteString("; ")
+			}
+			fmt.Fprintf(sb, "%s: %s", prop, html.EscapeString(val))
+			first = false
+		}
+		if hidden {
+			if !first {
+				sb.WriteString("; ")
+			}
+			sb.WriteString("display: none")
+		}
+		sb.WriteString(`"`)
 	}
 }
 

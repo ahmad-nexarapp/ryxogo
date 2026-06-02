@@ -86,6 +86,12 @@ func (r *Renderer) create(node *core.Node) js.Value {
 		el := doc.Call("createElement", node.Tag)
 		r.applyAttrs(el, node.Props)
 		r.attachEvents(el, node.Props)
+		// Fine-grained attribute / style / visibility bindings.
+		// Each subscribes only to the signals its compute fn reads, and
+		// updates just this element — Render() never re-runs for these.
+		if node.HasBindings() {
+			r.setupBindings(el, node.BindingSet())
+		}
 		for _, child := range node.Children {
 			if child != nil {
 				el.Call("appendChild", r.create(child))
