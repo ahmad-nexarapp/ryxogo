@@ -46,6 +46,8 @@ func main() {
 		cmdGenerate()
 	case "ai":
 		cmdAI()
+	case "fix":
+		cmdFix()
 	case "version", "--version", "-v":
 		fmt.Println("rxgo version", version)
 	case "help", "--help", "-h":
@@ -132,9 +134,17 @@ func cmdNew() {
 	fmt.Printf("\n  %s Installing dependencies...\n", cyan("→"))
 	cmd := exec.Command("go", "mod", "tidy")
 	cmd.Dir = appName
+	cmd.Env = append(os.Environ(),
+		"GONOSUMDB=github.com/ahmad-nexarapp/*",
+		"GOFLAGS=-mod=mod",
+		"GOPROXY=direct",
+	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		// Non-fatal — user can run go mod tidy themselves
+		fmt.Printf("\n  %s Could not auto-install deps. Run: go mod tidy\n", gray("→"))
+	}
 
 	// Success
 	fmt.Printf("\n  %s Done! Your RyxoGo app is ready.\n\n", green("✓"))
@@ -144,9 +154,91 @@ func cmdNew() {
 	fmt.Printf("  %s http://localhost:3000\n\n", gray("Opens at:"))
 }
 
-// ---------------------------------------------------------
-// rxgo serve
-// ---------------------------------------------------------
+// cmdFix patches common issues in existing RyxoGo projects
+func cmdFix() {
+	fmt.Printf("\n  %s Fixing RyxoGo project...\n\n", cyan("→"))
+	fixed := 0
+
+	// Walk all .go files and fix known patterns
+	filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		if strings.Contains(path, ".git") || strings.Contains(path, "dist") {
+			return filepath.SkipDir
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		content := string(data)
+		original := content
+
+		// Fix 1: *rx.Signal[T] → *signal.Signal[T]
+		if strings.Contains(content, "*rx.Signal[") ||
+			strings.Contains(content, "*rx.Computed[") ||
+			strings.Contains(content, "*rx.AsyncSignal[") {
+
+			// Add signal import if not present
+			if !strings.Contains(content, `"github.com/ahmad-nexarapp/ryxogo/signal"`) {
+				content = strings.Replace(content,
+					`rx "github.com/ahmad-nexarapp/ryxogo"`,
+					"rx \"github.com/ahmad-nexarapp/ryxogo\"\n\t\"github.com/ahmad-nexarapp/ryxogo/signal\"",
+					1,
+				)
+			}
+
+			// Replace type references
+			content = strings.ReplaceAll(content, "*rx.Signal[", "*signal.Signal[")
+			content = strings.ReplaceAll(content, "*rx.Computed[", "*signal.Computed[")
+			content = strings.ReplaceAll(content, "*rx.AsyncSignal[", "*signal.AsyncSignal[")
+		}
+
+		// Fix 2: old module path
+		content = strings.ReplaceAll(content, "github.com/ryxogo/ryxogo", "github.com/ahmad-nexarapp/ryxogo")
+
+		if content != original {
+			os.WriteFile(path, []byte(content), 0644)
+			fmt.Printf("  %s fixed %s\n", green("✓"), path)
+			fixed++
+		}
+		return nil
+	})
+
+	// Fix go.mod too
+	if data, err := os.ReadFile("go.mod"); err == nil {
+		content := string(data)
+		original := content
+		content = strings.ReplaceAll(content, "github.com/ryxogo/ryxogo", "github.com/ahmad-nexarapp/ryxogo")
+		content = strings.ReplaceAll(content, "v0.1.0", "v0.1.1")
+		if content != original {
+			os.WriteFile("go.mod", []byte(content), 0644)
+			fmt.Printf("  %s fixed go.mod\n", green("✓"))
+			fixed++
+		}
+	}
+
+	if fixed == 0 {
+		fmt.Printf("  %s No issues found\n\n", green("✓"))
+	} else {
+		fmt.Printf("\n  %s Fixed %d file(s)\n\n", green("✓"), fixed)
+	}
+
+	// Run go mod tidy after fix
+	fmt.Printf("  %s Running go mod tidy...\n", cyan("→"))
+	cmd := exec.Command("go", "mod", "tidy")
+	cmd.Env = append(os.Environ(),
+		"GONOSUMDB=github.com/ahmad-nexarapp/*",
+		"GOPROXY=direct",
+		"GOFLAGS=-mod=mod",
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Run()
+
+	fmt.Printf("\n  %s Done! Now run: rxgo serve\n\n", green("✓"))
+}
 
 func cmdServe() {
 	port := "3000"
@@ -311,7 +403,13 @@ func buildWASM(outDir string) error {
 
 	// Build the WASM binary
 	cmd := exec.Command("go", "build", "-o", filepath.Join(outDir, "app.wasm"), ".")
-	cmd.Env = append(os.Environ(), "GOARCH=wasm", "GOOS=js")
+	cmd.Env = append(os.Environ(),
+		"GOARCH=wasm",
+		"GOOS=js",
+		"GONOSUMDB=github.com/ahmad-nexarapp/*",
+		"GOFLAGS=-mod=mod",
+		"GOPROXY=direct",
+	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -626,6 +724,7 @@ func printHelp() {
 	fmt.Printf("    %s serve         Start MCP server for AI tools\n", cyan("mcp"))
 	fmt.Printf("    %s <type> <Name> Generate component, page, store, or type\n", cyan("generate"))
 	fmt.Printf("    %s sync          Regenerate AI config files\n", cyan("ai"))
+	fmt.Printf("    %s               Fix common issues in existing projects\n", cyan("fix"))
 	fmt.Printf("    %s               Show version\n", cyan("version"))
 	fmt.Println()
 	fmt.Println("  Examples:")
