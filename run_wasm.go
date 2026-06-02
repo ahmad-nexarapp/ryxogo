@@ -1,5 +1,6 @@
 //go:build wasm
 
+// run_wasm.go — WASM entry point. Fixes bugs #3, #4, #5, #11.
 package ryxogo
 
 import (
@@ -17,6 +18,7 @@ func run(a *App) {
 			return
 		}
 
+		// BUG FIX #11: call factory to get a FRESH component instance per navigation
 		comp := route.Handler(params, query)
 		if comp == nil {
 			show404(a)
@@ -28,48 +30,48 @@ func run(a *App) {
 			return
 		}
 
-		// Create renderer first
+		// Create renderer
 		r := renderer.New(a.rootID, c)
 
-		// scheduled tracks if a re-render is already queued
-		var scheduled bool
-
-		// scheduleUpdate batches rapid signal changes into one rAF
-		scheduleUpdate := func() {
-			if scheduled {
+		// BUG FIX #3 + #4: wire signal→render BEFORE Setup(), use rAF batching,
+		// never use dirty flag (drop it entirely — rAF is the coalescing mechanism)
+		var rafPending bool
+		scheduleRender := func() {
+			if rafPending {
 				return
 			}
-			scheduled = true
+			rafPending = true
 			js.Global().Call("requestAnimationFrame",
 				js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-					scheduled = false
-					r.Update()
+					rafPending = false
+					r.Update() // BUG FIX #4: no dirty flag, always renders
 					return nil
 				}),
 			)
 		}
 
-		// FIX: wire signal tracking BEFORE Setup() runs
-		// Any signal created in Setup() will trigger scheduleUpdate on change
-		signal.SetGlobalListener(scheduleUpdate)
+		// BUG FIX #3: register global listener BEFORE Setup() so every
+		// signal created inside Setup() auto-triggers re-renders
+		signal.SetGlobalListener(scheduleRender)
 
-		// Now call Setup() — signals created here are auto-wired
+		// Run Setup() — signals created here are now auto-wired
 		type setupper interface{ Setup() }
 		if s, ok := c.(setupper); ok {
 			s.Setup()
 		}
 
-		// Done wiring — clear global listener
+		// Clear global listener (only used during Setup)
 		signal.SetGlobalListener(nil)
 
-		// Mount into DOM
+		// First render
 		r.Mount()
 
-		if m, ok := c.(core_mounter); ok {
+		if m, ok := c.(interface{ OnMount() }); ok {
 			m.OnMount()
 		}
 	})
 
+	// Browser back/forward
 	js.Global().Call("addEventListener", "popstate",
 		js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 			path := js.Global().Get("location").Get("pathname").String()
@@ -78,13 +80,13 @@ func run(a *App) {
 		}),
 	)
 
+	// Initial navigation
 	currentPath := js.Global().Get("location").Get("pathname").String()
 	a.router.Navigate(currentPath)
 
+	// Keep WASM alive
 	select {}
 }
-
-type core_mounter interface{ OnMount() }
 
 func show404(a *App) {
 	doc := js.Global().Get("document")

@@ -784,7 +784,8 @@ import (
 
 func main() {
 	app := rx.New()
-	app.Route("/", &pages.HomePage{})
+	// Route takes a factory func — fresh component per navigation
+	app.Route("/", func() rx.Component { return &pages.HomePage{} })
 	app.Run()
 }
 `

@@ -111,30 +111,50 @@ func Async[T any](fn func() (T, error)) *signal.AsyncSignal[T] {
 
 // Re-export all element builders
 var (
-	Div     = core.Div
-	Span    = core.Span
-	P       = core.P
-	H1      = core.H1
-	H2      = core.H2
-	H3      = core.H3
-	Button  = core.Button
-	Input   = core.Input
-	Form    = core.Form
-	Img     = core.Img
-	A       = core.A
-	Ul      = core.Ul
-	Li      = core.Li
-	Nav     = core.Nav
-	Header  = core.Header
-	Main    = core.Main
-	Footer  = core.Footer
-	Section = core.Section
-	Article = core.Article
-	Text    = core.Text
+	Div      = core.Div
+	Span     = core.Span
+	P        = core.P
+	H1       = core.H1
+	H2       = core.H2
+	H3       = core.H3
+	Button   = core.Button
+	Input    = core.Input
+	Form     = core.Form
+	Img      = core.Img
+	A        = core.A
+	Ul       = core.Ul
+	Ol       = core.Ol
+	Li       = core.Li
+	Nav      = core.Nav
+	Header   = core.Header
+	Main     = core.Main
+	Footer   = core.Footer
+	Section  = core.Section
+	Article  = core.Article
+	Aside    = core.Aside
+	Label    = core.Label
+	Textarea = core.Textarea
+	Select   = core.Select
+	Option   = core.Option
+	Table    = core.Table
+	Thead    = core.Thead
+	Tbody    = core.Tbody
+	Tr       = core.Tr
+	Th       = core.Th
+	Td       = core.Td
+	Pre      = core.Pre
+	Code     = core.Code
+	Hr       = core.Hr
+	Br       = core.Br
+	Strong   = core.Strong
+	Em       = core.Em
+	Small    = core.Small
+	Text     = core.Text
 	Fragment = core.Fragment
-	If      = core.If
-	IfOnly  = core.IfOnly
-	Nodes   = core.Nodes
+	If       = core.If
+	IfOnly   = core.IfOnly
+	Nodes    = core.Nodes
+	El       = core.El
 )
 
 // Each renders a list from a slice — the Go equivalent of .map() in React
@@ -201,12 +221,21 @@ func (a *App) MountTo(id string) *App {
 	return a
 }
 
-// Route registers a page component for a URL pattern
+// Route registers a page factory for a URL pattern.
+// A new component instance is created on every navigation — no stale state.
 //
-//	app.Route("/", &HomePage{})
-//	app.Route("/users/:id", &UserPage{})
-//	app.Route("/blog/:slug", &BlogPost{})
-func (a *App) Route(pattern string, component Component) *App {
+//	app.Route("/", func() Component { return &HomePage{} })
+//	app.Route("/users/:id", func() Component { return &UserPage{} })
+func (a *App) Route(pattern string, factory func() Component) *App {
+	a.router.Add(pattern, func(params, query map[string]string) interface{} {
+		return factory()
+	})
+	return a
+}
+
+// RouteComponent registers a component directly (convenience — same instance reused).
+// Prefer Route() with a factory for pages that have state.
+func (a *App) RouteComponent(pattern string, component Component) *App {
 	a.router.Add(pattern, func(params, query map[string]string) interface{} {
 		return component
 	})

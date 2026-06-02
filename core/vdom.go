@@ -178,6 +178,83 @@ func Article(props Props, children ...*Node) *Node {
 	return El("article", props, children...)
 }
 
+// Additional elements
+func Label(props Props, children ...*Node) *Node {
+	return El("label", props, children...)
+}
+
+func Textarea(props Props, children ...*Node) *Node {
+	return El("textarea", props, children...)
+}
+
+func Select(props Props, children ...*Node) *Node {
+	return El("select", props, children...)
+}
+
+func Option(props Props, children ...*Node) *Node {
+	return El("option", props, children...)
+}
+
+func Table(props Props, children ...*Node) *Node {
+	return El("table", props, children...)
+}
+
+func Thead(props Props, children ...*Node) *Node {
+	return El("thead", props, children...)
+}
+
+func Tbody(props Props, children ...*Node) *Node {
+	return El("tbody", props, children...)
+}
+
+func Tr(props Props, children ...*Node) *Node {
+	return El("tr", props, children...)
+}
+
+func Th(props Props, children ...*Node) *Node {
+	return El("th", props, children...)
+}
+
+func Td(props Props, children ...*Node) *Node {
+	return El("td", props, children...)
+}
+
+func Pre(props Props, children ...*Node) *Node {
+	return El("pre", props, children...)
+}
+
+func Code(props Props, children ...*Node) *Node {
+	return El("code", props, children...)
+}
+
+func Hr(props Props) *Node {
+	return El("hr", props)
+}
+
+func Br(props Props) *Node {
+	return El("br", props)
+}
+
+func Strong(props Props, children ...*Node) *Node {
+	return El("strong", props, children...)
+}
+
+func Em(props Props, children ...*Node) *Node {
+	return El("em", props, children...)
+}
+
+func Small(props Props, children ...*Node) *Node {
+	return El("small", props, children...)
+}
+
+func Ol(props Props, children ...*Node) *Node {
+	return El("ol", props, children...)
+}
+
+func Aside(props Props, children ...*Node) *Node {
+	return El("aside", props, children...)
+}
+
 // ---------------------------------------------------------
 // Helpers — conditional rendering, list rendering
 // ---------------------------------------------------------

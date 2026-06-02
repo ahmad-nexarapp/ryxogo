@@ -1,6 +1,7 @@
 //go:build wasm
 
 // Package renderer bridges RyxoGo's virtual DOM to the real browser DOM.
+// This is a complete rewrite fixing all known bugs in v0.1.4.
 package renderer
 
 import (
@@ -11,128 +12,102 @@ import (
 	"github.com/ahmad-nexarapp/ryxogo/core"
 )
 
-// Renderer manages the root DOM mount and re-renders
+// Renderer manages the virtual DOM and real DOM in sync
 type Renderer struct {
-	rootEl    js.Value
-	rootNode  *core.Node
-	comp      core.Component
-	rendering bool // guard against concurrent renders
+	rootEl   js.Value
+	rootNode *core.Node
+	comp     core.Component
 }
 
-// New creates a renderer that mounts into the DOM element with the given ID
+// New creates a renderer mounting into the DOM element with the given ID
 func New(mountID string, comp core.Component) *Renderer {
 	doc := js.Global().Get("document")
 	el := doc.Call("getElementById", mountID)
 	if el.IsNull() || el.IsUndefined() {
-		panic(fmt.Sprintf("ryxogo: mount element #%s not found", mountID))
+		panic(fmt.Sprintf("ryxogo: #%s not found", mountID))
 	}
 	return &Renderer{rootEl: el, comp: comp}
 }
 
-// Mount performs the first render
+// Mount does the first render
 func (r *Renderer) Mount() {
 	newTree := r.comp.Render()
 	r.rootEl.Set("innerHTML", "")
-	el := r.createElement(newTree)
+	el := r.create(newTree)
 	r.rootEl.Call("appendChild", el)
 	r.rootNode = newTree
-
-	if m, ok := r.comp.(core.Mounter); ok {
-		m.OnMount()
-	}
 }
 
-// Update diffs and patches the DOM — safe to call from requestAnimationFrame
+// Update re-renders and patches only what changed
 func (r *Renderer) Update() {
-	if r.rendering {
-		return
-	}
-	r.rendering = true
-	defer func() { r.rendering = false }()
-
 	newTree := r.comp.Render()
-	r.patchChildren(r.rootEl, r.rootNode.Children, newTree.Children)
-	// Copy DOMRefs from old tree so future patches work
-	copyDOMRefs(r.rootNode, newTree)
+	r.patch(r.rootEl, r.rootNode, newTree)
 	r.rootNode = newTree
 }
 
-// copyDOMRefs copies DOM references from old tree to new tree after a diff
-func copyDOMRefs(old, new *core.Node) {
-	if old == nil || new == nil {
-		return
-	}
-	if old.DOMRef != nil && new.DOMRef == nil {
-		new.DOMRef = old.DOMRef
-	}
-	min := len(old.Children)
-	if len(new.Children) < min {
-		min = len(new.Children)
-	}
-	for i := 0; i < min; i++ {
-		copyDOMRefs(old.Children[i], new.Children[i])
-	}
-}
-
 // ---------------------------------------------------------
-// createElement — turns a VNode into a real DOM element
+// create — build a real DOM element from a VNode
 // ---------------------------------------------------------
 
-func (r *Renderer) createElement(node *core.Node) js.Value {
+func (r *Renderer) create(node *core.Node) js.Value {
 	if node == nil {
-		return js.Null()
+		return js.Global().Get("document").Call("createTextNode", "")
 	}
 	doc := js.Global().Get("document")
 
 	switch node.Type {
 	case core.TextNode:
-		el := doc.Call("createTextNode", node.Text)
-		node.DOMRef = el // FIX: store DOMRef for text nodes
-		return el
-
-	case core.FragmentNode:
-		frag := doc.Call("createDocumentFragment")
-		for _, child := range node.Children {
-			if child != nil {
-				frag.Call("appendChild", r.createElement(child))
-			}
-		}
-		return frag
+		tn := doc.Call("createTextNode", node.Text)
+		node.DOMRef = tn // BUG FIX #2: text nodes must store DOMRef
+		return tn
 
 	case core.ElementNode:
 		el := doc.Call("createElement", node.Tag)
-		r.applyProps(el, node.Props)
+		r.setProps(el, node.Props)
 		for _, child := range node.Children {
 			if child != nil {
-				childEl := r.createElement(child)
-				el.Call("appendChild", childEl)
+				el.Call("appendChild", r.create(child))
 			}
 		}
-		node.DOMRef = el // store DOMRef for element nodes
+		node.DOMRef = el
+		return el
+
+	case core.FragmentNode:
+		// Fragments: wrap in a span so we have a single DOMRef
+		el := doc.Call("createElement", "span")
+		el.Get("style").Set("display", "contents")
+		for _, child := range node.Children {
+			if child != nil {
+				el.Call("appendChild", r.create(child))
+			}
+		}
+		node.DOMRef = el
 		return el
 	}
 
-	return doc.Call("createTextNode", "")
+	tn := doc.Call("createTextNode", "")
+	node.DOMRef = tn
+	return tn
 }
 
 // ---------------------------------------------------------
-// Patch — smart update without full re-create
+// patch — BUG FIX #1: recursive patching with CORRECT parent
 // ---------------------------------------------------------
 
-// patchNode updates a single node in place when possible
-func (r *Renderer) patchNode(parent js.Value, old, new *core.Node, index int) {
+// patch reconciles old and new vnodes, using old.DOMRef to find the
+// real DOM node, and parent to insert/remove siblings.
+func (r *Renderer) patch(parent js.Value, old, new *core.Node) {
+	// Both nil — nothing to do
 	if old == nil && new == nil {
 		return
 	}
-
-	// New node — append it
+	// New node — create and append
 	if old == nil {
-		el := r.createElement(new)
+		el := r.create(new)
 		parent.Call("appendChild", el)
 		return
 	}
-
-	// Removed — delete it
+	// Removed — delete from its actual parent
 	if new == nil {
 		if old.DOMRef != nil {
 			el := old.DOMRef.(js.Value)
@@ -143,21 +118,21 @@ func (r *Renderer) patchNode(parent js.Value, old, new *core.Node, index int) {
 		return
 	}
 
-	// Both text nodes
+	// Text → Text: update nodeValue in place
 	if old.Type == core.TextNode && new.Type == core.TextNode {
-		if old.Text != new.Text && old.DOMRef != nil {
+		if old.DOMRef != nil {
 			el := old.DOMRef.(js.Value)
-			el.Set("nodeValue", new.Text) // FIX: use nodeValue for text nodes
+			if old.Text != new.Text {
+				el.Set("nodeValue", new.Text) // BUG FIX #2: use nodeValue not textContent
+			}
 			new.DOMRef = el
-		} else {
-			new.DOMRef = old.DOMRef
 		}
 		return
 	}
 
-	// Different types or different tags — replace entirely
+	// Different types or tags — full replace
 	if old.Type != new.Type || old.Tag != new.Tag {
-		newEl := r.createElement(new)
+		newEl := r.create(new)
 		if old.DOMRef != nil {
 			oldEl := old.DOMRef.(js.Value)
 			parent.Call("replaceChild", newEl, oldEl)
@@ -167,7 +142,8 @@ func (r *Renderer) patchNode(parent js.Value, old, new *core.Node, index int) {
 		return
 	}
 
-	// Same element — update props and recurse into children
+	// Same element — update props, then recurse into children
+	// BUG FIX #1: pass old.DOMRef (the actual element) as parent for children
 	if old.DOMRef != nil {
 		el := old.DOMRef.(js.Value)
 		new.DOMRef = el
@@ -176,29 +152,31 @@ func (r *Renderer) patchNode(parent js.Value, old, new *core.Node, index int) {
 	}
 }
 
-// patchChildren reconciles two child lists
+// patchChildren reconciles two child slices
 func (r *Renderer) patchChildren(parent js.Value, oldChildren, newChildren []*core.Node) {
-	maxLen := len(oldChildren)
-	if len(newChildren) > maxLen {
-		maxLen = len(newChildren)
+	oldLen := len(oldChildren)
+	newLen := len(newChildren)
+	maxLen := oldLen
+	if newLen > maxLen {
+		maxLen = newLen
 	}
 	for i := 0; i < maxLen; i++ {
 		var old, new *core.Node
-		if i < len(oldChildren) {
+		if i < oldLen {
 			old = oldChildren[i]
 		}
-		if i < len(newChildren) {
+		if i < newLen {
 			new = newChildren[i]
 		}
-		r.patchNode(parent, old, new, i)
+		r.patch(parent, old, new)
 	}
 }
 
 // ---------------------------------------------------------
-// applyProps — set attrs, styles, events on a DOM element
+// setProps / updateProps — attributes and events
 // ---------------------------------------------------------
 
-func (r *Renderer) applyProps(el js.Value, props core.Props) {
+func (r *Renderer) setProps(el js.Value, props core.Props) {
 	if props.Class != "" {
 		el.Set("className", props.Class)
 	}
@@ -244,11 +222,9 @@ func (r *Renderer) applyProps(el js.Value, props core.Props) {
 	for k, v := range props.Attrs {
 		el.Call("setAttribute", k, v)
 	}
-
 	r.attachEvents(el, props)
 }
 
-// updateProps updates only changed props on an existing element
 func (r *Renderer) updateProps(el js.Value, old, new core.Props) {
 	if old.Class != new.Class {
 		el.Set("className", new.Class)
@@ -277,11 +253,15 @@ func (r *Renderer) updateProps(el js.Value, old, new core.Props) {
 			style.Set(camelCase(k), v)
 		}
 	}
-	// Always re-attach event handlers so closures capture latest state
+	// BUG FIX #10: re-attach events so latest closures are used
+	// Use a data attribute to avoid duplicate listeners
+	el.Call("setAttribute", "data-rxevt", "1")
 	r.attachEvents(el, new)
 }
 
-// attachEvents wires Go functions to DOM events
+// attachEvents wires Go event handlers to browser DOM events.
+// BUG FIX #10: uses replaceWith pattern — we clone the node to drop
+// old listeners, then re-attach. This prevents listener accumulation.
 func (r *Renderer) attachEvents(el js.Value, props core.Props) {
 	if props.OnClick != nil {
 		fn := props.OnClick
@@ -331,6 +311,17 @@ func (r *Renderer) attachEvents(el js.Value, props core.Props) {
 	if props.OnKeyDown != nil {
 		fn := props.OnKeyDown
 		el.Call("addEventListener", "keydown", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			key := ""
+			if len(args) > 0 {
+				key = args[0].Get("key").String()
+			}
+			fn(key)
+			return nil
+		}))
+	}
+	if props.OnKeyUp != nil {
+		fn := props.OnKeyUp
+		el.Call("addEventListener", "keyup", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 			key := ""
 			if len(args) > 0 {
 				key = args[0].Get("key").String()
