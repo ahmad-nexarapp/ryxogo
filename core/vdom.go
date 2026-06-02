@@ -28,7 +28,12 @@ type Node struct {
 	Key        string            // for efficient list diffing
 	Component  Component         // for ComponentNode
 	DOMRef     interface{}       // reference to real DOM element (js.Value in WASM)
+	reactive   *ReactiveText     // fine-grained binding; nil for static text nodes
 }
+
+// Reactive returns the node's fine-grained binding, or nil if static.
+// Used by the renderer to set up per-node effects.
+func (n *Node) Reactive() *ReactiveText { return n.reactive }
 
 // Props holds all attributes, classes, styles, and event handlers for a node
 type Props struct {

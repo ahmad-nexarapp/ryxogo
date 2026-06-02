@@ -166,6 +166,18 @@ var (
 	El       = core.El
 )
 
+// BindText creates a fine-grained reactive text node. When the signals read
+// inside compute change, ONLY this text node updates — Render() does not
+// re-run. Use it for hot paths (counters, live values) where you want
+// Solid-style surgical updates instead of re-rendering the whole component.
+//
+//	// Coarse (default — re-runs Render on change, then diffs):
+//	rx.Text(strconv.Itoa(p.count.Val()))
+//
+//	// Fine-grained (only this node updates, no Render re-run):
+//	rx.BindText(func() string { return strconv.Itoa(p.count.Val()) })
+var BindText = core.BindText
+
 // Bind creates Props for a controlled input from a value + setter.
 // For string signals, BindString is simpler.
 //

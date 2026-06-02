@@ -47,7 +47,13 @@ func renderNode(sb *strings.Builder, node *core.Node) {
 	}
 	switch node.Type {
 	case core.TextNode:
-		sb.WriteString(html.EscapeString(node.Text))
+		// Reactive text nodes: compute the current value once for the
+		// server-rendered HTML. The client effect takes over on hydration.
+		if rt := node.Reactive(); rt != nil && rt.Compute != nil {
+			sb.WriteString(html.EscapeString(rt.Compute()))
+		} else {
+			sb.WriteString(html.EscapeString(node.Text))
+		}
 	case core.FragmentNode:
 		for _, child := range node.Children {
 			renderNode(sb, child)

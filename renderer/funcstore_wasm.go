@@ -45,14 +45,26 @@ func (r *Renderer) makeFunc(el js.Value, fn func(js.Value, []js.Value) interface
 	return f
 }
 
-// releaseNode frees all event listener funcs for a DOM node.
-// Called before removeChild or replaceChild.
+// releaseNode frees event listener funcs AND reactive text effects for a node.
+// Called before removeChild or replaceChild. Works for both element nodes
+// (which carry listeners via data-ryxo-id) and text nodes (which carry
+// reactive effects via the __rxReactiveId JS property).
 func releaseNode(ref interface{}) {
 	if ref == nil {
 		return
 	}
 	el, ok := ref.(js.Value)
 	if !ok {
+		return
+	}
+
+	// Release any fine-grained reactive text effect on this node.
+	releaseReactive(ref)
+
+	// Element nodes also need their event-listener funcs released.
+	// nodeType 1 == element; text nodes (3) have no listeners and no
+	// getAttribute, so we skip them.
+	if el.Get("nodeType").Int() != 1 {
 		return
 	}
 	idVal := el.Call("getAttribute", "data-ryxo-id")

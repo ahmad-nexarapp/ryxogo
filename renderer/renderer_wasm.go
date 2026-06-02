@@ -59,6 +59,26 @@ func (r *Renderer) create(node *core.Node) js.Value {
 	doc := js.Global().Get("document")
 	switch node.Type {
 	case core.TextNode:
+		// Fine-grained reactive text: compute initial value and subscribe
+		// only this node to its signals. When they change, only this text
+		// node's nodeValue updates — Render() does NOT re-run.
+		if rt := node.Reactive(); rt != nil {
+			initial := ""
+			tn := doc.Call("createTextNode", "")
+			node.DOMRef = tn
+			// Track the compute fn: reads inside it auto-subscribe.
+			// onChange updates just this node.
+			stop := trackReactive(rt.Compute, func(val string) {
+				ref := node.DOMRef
+				if ref != nil {
+					ref.(js.Value).Set("nodeValue", val)
+				}
+			}, &initial)
+			tn.Set("nodeValue", initial)
+			// Register cleanup so the per-node effect is released on removal
+			registerReactiveCleanup(tn, stop)
+			return tn
+		}
 		tn := doc.Call("createTextNode", node.Text)
 		node.DOMRef = tn
 		return tn
@@ -112,6 +132,12 @@ func (r *Renderer) patch(parent js.Value, old, new *core.Node) {
 	if old.Type == core.TextNode && new.Type == core.TextNode {
 		if old.DOMRef != nil {
 			el := old.DOMRef.(js.Value)
+			// Reactive text nodes manage their own value via their effect.
+			// Carry the live DOM node + effect forward; don't overwrite value.
+			if old.Reactive() != nil || new.Reactive() != nil {
+				new.DOMRef = el
+				return
+			}
 			if old.Text != new.Text {
 				el.Set("nodeValue", new.Text)
 			}
