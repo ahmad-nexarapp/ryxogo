@@ -7,8 +7,8 @@ package ryxogo
 import (
 	"syscall/js"
 
-	"github.com/ryxogo/ryxogo/renderer"
-	"github.com/ryxogo/ryxogo/router"
+	"github.com/ahmad-nexarapp/ryxogo/renderer"
+	"github.com/ahmad-nexarapp/ryxogo/router"
 )
 
 // run starts the RyxoGo app in the browser.

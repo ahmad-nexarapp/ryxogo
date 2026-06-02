@@ -255,7 +255,7 @@ This returns the complete app structure as JSON.
 - Language: Go (not JavaScript, not TypeScript)
 - Framework: RyxoGo (not React, not Vue, not Angular)
 - Target: WebAssembly (GOARCH=wasm)
-- Import: rx "github.com/ryxogo/ryxogo"
+- Import: rx "github.com/ahmad-nexarapp/ryxogo"
 
 ## Required Patterns
 
@@ -263,7 +263,7 @@ This returns the complete app structure as JSON.
 
   package components  // or pages, stores
 
-  import rx "github.com/ryxogo/ryxogo"
+  import rx "github.com/ahmad-nexarapp/ryxogo"
 
   type [Name]Props struct {   // omit if no props
       FieldName Type

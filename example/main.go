@@ -6,7 +6,7 @@ package main
 import (
 	"strconv"
 
-	rx "github.com/ryxogo/ryxogo"
+	rx "github.com/ahmad-nexarapp/ryxogo"
 )
 
 // ---------------------------------------------------------

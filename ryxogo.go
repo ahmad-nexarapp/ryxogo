@@ -28,9 +28,9 @@
 package ryxogo
 
 import (
-	"github.com/ryxogo/ryxogo/core"
-	"github.com/ryxogo/ryxogo/signal"
-	"github.com/ryxogo/ryxogo/router"
+	"github.com/ahmad-nexarapp/ryxogo/core"
+	"github.com/ahmad-nexarapp/ryxogo/signal"
+	"github.com/ahmad-nexarapp/ryxogo/router"
 )
 
 // ---------------------------------------------------------

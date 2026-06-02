@@ -1,5 +1,5 @@
 // rxgo — The RyxoGo CLI tool
-// Install: go install github.com/ryxogo/ryxogo/cli/cmd/rxgo@latest
+// Install: go install github.com/ahmad-nexarapp/ryxogo/cli/cmd/rxgo@latest
 // Commands: new, serve, build, mcp, generate, ai
 package main
 
@@ -448,7 +448,7 @@ func generateComponent(name string) {
 	path := filepath.Join("components", strings.ToLower(name)+".go")
 	content := fmt.Sprintf(`package components
 
-import rx "github.com/ryxogo/ryxogo"
+import rx "github.com/ahmad-nexarapp/ryxogo"
 
 type %sProps struct {
 	// Define props here
@@ -478,7 +478,7 @@ func generatePage(name string) {
 	path := filepath.Join("pages", strings.ToLower(name)+".go")
 	content := fmt.Sprintf(`package pages
 
-import rx "github.com/ryxogo/ryxogo"
+import rx "github.com/ahmad-nexarapp/ryxogo"
 
 // %s handles route — register in main.go:
 // app.Route("/%s", &%s{})
@@ -508,7 +508,7 @@ func generateStore(name string) {
 	path := filepath.Join("stores", strings.ToLower(name)+".go")
 	content := fmt.Sprintf(`package stores
 
-import rx "github.com/ryxogo/ryxogo"
+import rx "github.com/ahmad-nexarapp/ryxogo"
 
 type %s struct {
 	// Define store fields here
@@ -665,7 +665,7 @@ func red(s string) string    { return "\033[31m" + s + "\033[0m" }
 const mainGoTemplate = `package main
 
 import (
-	rx "github.com/ryxogo/ryxogo"
+	rx "github.com/ahmad-nexarapp/ryxogo"
 	"{{.ModuleName}}/pages"
 )
 
@@ -680,7 +680,7 @@ const pagesIndexTemplate = `package pages
 
 import (
 	"strconv"
-	rx "github.com/ryxogo/ryxogo"
+	rx "github.com/ahmad-nexarapp/ryxogo"
 )
 
 type HomePage struct {
@@ -714,7 +714,7 @@ const goModTemplate = `module {{.ModuleName}}
 
 go 1.22
 
-require github.com/ryxogo/ryxogo v0.1.0
+require github.com/ahmad-nexarapp/ryxogo v0.1.0
 `
 
 const gitignoreTemplate = `dist/

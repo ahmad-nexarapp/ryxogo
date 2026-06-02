@@ -793,7 +793,7 @@ func (s *Server) generateScaffold(args map[string]interface{}) (string, error) {
 
 	var sb strings.Builder
 	sb.WriteString("package components\n\n")
-	sb.WriteString("import rx \"github.com/ryxogo/ryxogo\"\n\n")
+	sb.WriteString("import rx \"github.com/ahmad-nexarapp/ryxogo\"\n\n")
 
 	if hasProps {
 		sb.WriteString(fmt.Sprintf("type %sProps struct {\n\t// TODO: define props\n}\n\n", name))

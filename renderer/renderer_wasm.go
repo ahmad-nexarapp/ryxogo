@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall/js"
 
-	"github.com/ryxogo/ryxogo/core"
+	"github.com/ahmad-nexarapp/ryxogo/core"
 )
 
 // ---------------------------------------------------------

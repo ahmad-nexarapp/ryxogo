@@ -9,7 +9,7 @@ var AppTemplate = map[string]string{
 	"main.go": `package main
 
 import (
-	rx "github.com/ryxogo/ryxogo"
+	rx "github.com/ahmad-nexarapp/ryxogo"
 	"{{.ModuleName}}/pages"
 )
 
@@ -31,7 +31,7 @@ func main() {
 
 import (
 	"strconv"
-	rx "github.com/ryxogo/ryxogo"
+	rx "github.com/ahmad-nexarapp/ryxogo"
 )
 
 // HomePage is the main landing page at route "/"
@@ -85,7 +85,7 @@ func (p *HomePage) Render() *rx.Node {
 
 go 1.22
 
-require github.com/ryxogo/ryxogo v0.1.0
+require github.com/ahmad-nexarapp/ryxogo v0.1.0
 `,
 
 	// -------------------------------------------------------
@@ -138,7 +138,7 @@ Create ` + "`pages/about.go`" + ` → becomes route ` + "`/about`" + `
 ` + "```go" + `
 package pages
 
-import rx "github.com/ryxogo/ryxogo"
+import rx "github.com/ahmad-nexarapp/ryxogo"
 
 type AboutPage struct{ rx.Page }
 
