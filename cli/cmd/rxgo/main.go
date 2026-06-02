@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -267,50 +268,83 @@ func cmdFix() {
 
 func cmdServe() {
 	port := "3000"
-	if len(os.Args) >= 3 {
+	if len(os.Args) >= 3 && !strings.HasPrefix(os.Args[2], "-") {
 		port = os.Args[2]
 	}
 
-	// Check we're in a RyxoGo project
 	if _, err := os.Stat("go.mod"); os.IsNotExist(err) {
 		fatal("Not a Go project. Run rxgo new <appname> first.")
 	}
 
 	fmt.Printf("\n  %s RyxoGo dev server\n\n", cyan("⚡"))
 
-	// Build WASM first
 	fmt.Printf("  %s Building...\n", cyan("→"))
 	if err := buildWASM("dist"); err != nil {
 		fatal("Build failed: " + err.Error())
 	}
 	fmt.Printf("  %s Built successfully\n\n", green("✓"))
 
-	// Watch for changes in background
-	go watchAndRebuild("dist")
+	// Live-reload hub: rebuilds bump the version; SSE clients get notified.
+	hub := newReloadHub()
 
-	// Serve static files + WASM
+	// Watch + rebuild, notifying the hub (and browser) on every change.
+	go watchAndReload("dist", hub)
+
 	mux := http.NewServeMux()
 
-	// Serve dist/ directory
+	// SSE endpoint the browser listens on for reload signals.
+	mux.HandleFunc("/__rxgo_reload", hub.handleSSE)
+
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// All routes serve index.html (SPA)
-		if r.URL.Path != "/" && !strings.Contains(r.URL.Path, ".") {
-			http.ServeFile(w, r, "dist/index.html")
+		// Serve index.html (with live-reload script injected) for SPA routes.
+		if r.URL.Path == "/" || (!strings.Contains(r.URL.Path, ".")) {
+			serveIndexWithReload(w, "dist/index.html")
 			return
 		}
+		// Disable caching in dev so fresh WASM is always fetched.
+		w.Header().Set("Cache-Control", "no-store")
 		http.FileServer(http.Dir("dist")).ServeHTTP(w, r)
 	}))
 
-	fmt.Printf("  %s http://localhost:%s\n\n", green("✓ Running at"), port)
-	fmt.Printf("  %s\n\n", gray("Watching for changes... Press Ctrl+C to stop"))
+	fmt.Printf("  %s http://localhost:%s\n", green("✓ Running at"), port)
+	fmt.Printf("  %s live reload enabled — saves auto-refresh the browser\n\n", gray("→"))
+	fmt.Printf("  %s\n\n", gray("Press Ctrl+C to stop"))
 
-	// Open browser
 	go openBrowser("http://localhost:" + port)
 
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
 		fatal("Server error: " + err.Error())
 	}
 }
+
+// serveIndexWithReload serves index.html with the live-reload client injected.
+func serveIndexWithReload(w http.ResponseWriter, path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, "index.html not found", 404)
+		return
+	}
+	html := string(data)
+	// Inject the reload client just before </body>.
+	if strings.Contains(html, "</body>") {
+		html = strings.Replace(html, "</body>", liveReloadScript+"</body>", 1)
+	} else {
+		html += liveReloadScript
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write([]byte(html))
+}
+
+// liveReloadScript is a tiny EventSource client that reloads the page when
+// the dev server signals a rebuild.
+const liveReloadScript = `<script>
+(function(){
+  var es = new EventSource('/__rxgo_reload');
+  es.onmessage = function(e){ if(e.data === 'reload'){ location.reload(); } };
+  es.onerror = function(){ /* dev server restarting — browser retries automatically */ };
+})();
+</script>`
 
 // ---------------------------------------------------------
 // rxgo build
@@ -710,13 +744,76 @@ func findWASMFile(outDir string) string {
 	return ""
 }
 
-// watchAndRebuild watches for file changes and rebuilds
-func watchAndRebuild(outDir string) {
-	// Simple file watcher — checks for changes every second
+// ---------------------------------------------------------
+// Live reload: SSE hub + watcher
+// ---------------------------------------------------------
+
+// reloadHub broadcasts reload signals to all connected browser tabs via SSE.
+type reloadHub struct {
+	mu      sync.Mutex
+	clients map[chan string]struct{}
+}
+
+func newReloadHub() *reloadHub {
+	return &reloadHub{clients: make(map[chan string]struct{})}
+}
+
+// handleSSE keeps a connection open and streams reload events to the browser.
+func (h *reloadHub) handleSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch := make(chan string, 1)
+	h.mu.Lock()
+	h.clients[ch] = struct{}{}
+	h.mu.Unlock()
+
+	defer func() {
+		h.mu.Lock()
+		delete(h.clients, ch)
+		h.mu.Unlock()
+		close(ch)
+	}()
+
+	// Initial comment so the connection is established.
+	fmt.Fprintf(w, ": connected\n\n")
+	flusher.Flush()
+
+	for {
+		select {
+		case msg := <-ch:
+			fmt.Fprintf(w, "data: %s\n\n", msg)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// broadcast sends a message to every connected browser tab.
+func (h *reloadHub) broadcast(msg string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.clients {
+		select {
+		case ch <- msg:
+		default:
+		}
+	}
+}
+
+// watchAndReload watches .go files, rebuilds on change, and tells browsers to reload.
+func watchAndReload(outDir string, hub *reloadHub) {
 	modTimes := map[string]time.Time{}
 
 	for {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(400 * time.Millisecond)
 		changed := false
 
 		filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
@@ -733,7 +830,7 @@ func watchAndRebuild(outDir string) {
 			}
 			if prev, ok := modTimes[path]; !ok || info.ModTime().After(prev) {
 				modTimes[path] = info.ModTime()
-				if ok { // only mark changed if we've seen it before
+				if ok {
 					changed = true
 				}
 			}
@@ -744,8 +841,10 @@ func watchAndRebuild(outDir string) {
 			fmt.Printf("\n  %s File changed — rebuilding...\n", cyan("→"))
 			if err := buildWASM(outDir); err != nil {
 				fmt.Printf("  %s Build error: %v\n", red("✗"), err)
+				// Don't reload on a broken build — let the dev fix it first.
 			} else {
-				fmt.Printf("  %s Rebuilt at %s\n", green("✓"), time.Now().Format("15:04:05"))
+				fmt.Printf("  %s Rebuilt at %s — reloading browser\n", green("✓"), time.Now().Format("15:04:05"))
+				hub.broadcast("reload")
 			}
 		}
 	}

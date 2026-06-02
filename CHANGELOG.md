@@ -5,6 +5,21 @@ All notable changes to RyxoGo are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
+## [v0.4.1] — 2026-06-03
+
+### Added
+- **True hot reload** in `rxgo serve`. Previously the dev server rebuilt on file change but you had to refresh the browser manually. Now the browser refreshes itself automatically when a rebuild finishes.
+  - Dev server exposes a Server-Sent Events endpoint (`/__rxgo_reload`).
+  - A tiny client script is injected into the served `index.html` that listens and calls `location.reload()` on the `reload` signal.
+  - Dev assets are served with `Cache-Control: no-store` so the fresh WASM is always loaded.
+  - A broken build does **not** trigger a reload — you fix the error first, and the next good build reloads.
+
+### Update
+```bash
+go get github.com/ahmad-nexarapp/ryxogo@v0.4.1
+rxgo serve   # edit a .go file, save, watch the browser refresh
+```
+
 ## [v0.4.0] — 2026-06-03
 
 ### Added — bundle size & deployment
@@ -127,6 +142,7 @@ rx.BindText(func() string { return strconv.Itoa(p.count.Val()) })
 ### Added
 - Initial release: signals, computed, async signals, virtual DOM renderer, file-based router, HTTP client, `rxgo` CLI (`new`, `serve`, `build`), WASM build pipeline.
 
+[v0.4.1]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.4.1
 [v0.4.0]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.4.0
 [v0.3.2]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.3.2
 [v0.3.1]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.3.1
