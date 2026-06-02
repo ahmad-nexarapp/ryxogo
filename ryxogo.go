@@ -28,6 +28,7 @@
 package ryxogo
 
 import (
+	"fmt"
 	"github.com/ahmad-nexarapp/ryxogo/core"
 	"github.com/ahmad-nexarapp/ryxogo/signal"
 	"github.com/ahmad-nexarapp/ryxogo/router"
@@ -221,24 +222,34 @@ func (a *App) MountTo(id string) *App {
 	return a
 }
 
-// Route registers a page factory for a URL pattern.
-// A new component instance is created on every navigation — no stale state.
+// Route registers a URL pattern with a page.
+// Accepts either a component instance OR a factory function — both work:
 //
+//	// Simple (same instance reused — fine for stateless pages)
+//	app.Route("/about", &AboutPage{})
+//
+//	// Factory (fresh instance per navigation — recommended for pages with state)
 //	app.Route("/", func() Component { return &HomePage{} })
-//	app.Route("/users/:id", func() Component { return &UserPage{} })
-func (a *App) Route(pattern string, factory func() Component) *App {
-	a.router.Add(pattern, func(params, query map[string]string) interface{} {
-		return factory()
-	})
-	return a
-}
-
-// RouteComponent registers a component directly (convenience — same instance reused).
-// Prefer Route() with a factory for pages that have state.
-func (a *App) RouteComponent(pattern string, component Component) *App {
-	a.router.Add(pattern, func(params, query map[string]string) interface{} {
-		return component
-	})
+//
+// Both signatures are supported for full backward compatibility.
+func (a *App) Route(pattern string, page interface{}) *App {
+	switch v := page.(type) {
+	case func() Component:
+		// Factory function — fresh instance per navigation
+		a.router.Add(pattern, func(params, query map[string]string) interface{} {
+			return v()
+		})
+	case Component:
+		// Component instance — reused across navigations
+		// Wraps it in a factory so the framework handles it uniformly
+		a.router.Add(pattern, func(params, query map[string]string) interface{} {
+			return v
+		})
+	default:
+		// Unknown type — panic with a helpful message
+		panic("rxgo: Route() accepts a Component or func() Component, got " +
+			fmt.Sprintf("%T", page))
+	}
 	return a
 }
 
