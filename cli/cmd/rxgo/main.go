@@ -448,7 +448,10 @@ func generateComponent(name string) {
 	path := filepath.Join("components", strings.ToLower(name)+".go")
 	content := fmt.Sprintf(`package components
 
-import rx "github.com/ahmad-nexarapp/ryxogo"
+import (
+	rx "github.com/ahmad-nexarapp/ryxogo"
+	_ "github.com/ahmad-nexarapp/ryxogo/signal"
+)
 
 type %sProps struct {
 	// Define props here
@@ -461,6 +464,7 @@ type %s struct {
 
 func (c *%s) Setup() {
 	// Initialize signals here
+	// Example: c.count = rx.Use(0)
 }
 
 func (c *%s) Render() *rx.Node {
@@ -681,11 +685,12 @@ const pagesIndexTemplate = `package pages
 import (
 	"strconv"
 	rx "github.com/ahmad-nexarapp/ryxogo"
+	"github.com/ahmad-nexarapp/ryxogo/signal"
 )
 
 type HomePage struct {
 	rx.Page
-	count *rx.Signal[int]
+	count *signal.Signal[int]
 }
 
 func (p *HomePage) Setup() {

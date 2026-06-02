@@ -31,6 +31,7 @@ import (
 	"github.com/ahmad-nexarapp/ryxogo/core"
 	"github.com/ahmad-nexarapp/ryxogo/signal"
 	"github.com/ahmad-nexarapp/ryxogo/router"
+	rhttp "github.com/ahmad-nexarapp/ryxogo/http"
 )
 
 // ---------------------------------------------------------
@@ -139,6 +140,41 @@ var (
 // Each renders a list from a slice — the Go equivalent of .map() in React
 func Each[T any](items []T, fn func(item T, index int) *Node) []*Node {
 	return core.Each(items, fn)
+}
+
+// ---------------------------------------------------------
+// HTTP — convenience functions available as rx.Get, rx.Post etc
+// ---------------------------------------------------------
+
+// Get performs a GET request and decodes the JSON response into T.
+//
+//	users, err := rx.Get[[]User]("/api/users")
+func Get[T any](url string) (T, error) {
+	return rhttp.Get[T](url)
+}
+
+// Post performs a POST request with a JSON body.
+//
+//	res, err := rx.Post[Response]("/api/users", map[string]any{"name": "Alice"})
+func Post[T any](url string, body interface{}) (T, error) {
+	return rhttp.Post[T](url, body)
+}
+
+// Put performs a PUT request with a JSON body.
+func Put[T any](url string, body interface{}) (T, error) {
+	return rhttp.Put[T](url, body)
+}
+
+// Del performs a DELETE request.
+func Del(url string) error {
+	return rhttp.Del(url)
+}
+
+// Fetch creates a chainable HTTP request builder.
+//
+//	rx.Fetch("/api/users").Bearer(token).Param("page","2").DoJSON(&result)
+func Fetch(url string) *rhttp.Request {
+	return rhttp.Fetch(url)
 }
 
 // ---------------------------------------------------------

@@ -63,6 +63,9 @@ type Props struct {
 
 	// Extra arbitrary attributes
 	Data        map[string]string // data-* attributes
+
+	// Key for efficient list diffing — set this when rendering lists
+	Key         string
 }
 
 // ---------------------------------------------------------
