@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.1.0"
+const version = "0.1.2"
 
 const banner = `
   ██████╗ ██╗   ██╗██╗  ██╗ ██████╗  ██████╗  ██████╗ 
@@ -818,7 +818,7 @@ const goModTemplate = `module {{.ModuleName}}
 
 go 1.22
 
-require github.com/ahmad-nexarapp/ryxogo v0.1.0
+require github.com/ahmad-nexarapp/ryxogo v0.1.2
 `
 
 const gitignoreTemplate = `dist/
