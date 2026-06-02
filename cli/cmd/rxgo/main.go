@@ -4,6 +4,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -317,18 +319,36 @@ func cmdServe() {
 // cmdBuild builds for production
 func cmdBuild() {
 	outDir := "dist"
+	opts := buildOptions{}
 	compress := false
 	for _, a := range os.Args[2:] {
-		if a == "--compress" || a == "-z" {
+		switch {
+		case a == "--compress" || a == "-z":
 			compress = true
-		} else if !strings.HasPrefix(a, "-") {
+		case a == "--tiny":
+			opts.tiny = true
+		case a == "--hash":
+			opts.hash = true
+		case a == "--prod":
+			// --prod is the recommended bundle: tiny + hash + compress
+			opts.tiny = true
+			opts.hash = true
+			compress = true
+		case !strings.HasPrefix(a, "-"):
 			outDir = a
 		}
 	}
 
-	fmt.Printf("\n  %s Building for production...\n\n", cyan("⚡"))
+	fmt.Printf("\n  %s Building for production...\n", cyan("⚡"))
+	if opts.tiny {
+		fmt.Printf("  %s TinyGo (small binary)\n", gray("→"))
+	}
+	if opts.hash {
+		fmt.Printf("  %s content-hashed filename (immortal caching)\n", gray("→"))
+	}
+	fmt.Println()
 
-	if err := buildWASM(outDir); err != nil {
+	if err := buildWASMOpts(outDir, opts); err != nil {
 		fatal("Build failed: " + err.Error())
 	}
 
@@ -336,29 +356,39 @@ func cmdBuild() {
 		compressWASM(outDir)
 	}
 
-	// Get file sizes
-	wasmInfo, _ := os.Stat(filepath.Join(outDir, "app.wasm"))
+	// Write host config files (cache headers + content-encoding + SPA fallback)
+	// so hashed assets are cached forever and compressed variants are served.
+	writeDeployConfigs(outDir, opts.hash)
+
+	// Report actual sizes from the real (possibly hashed) wasm file
+	wasmPath := findWASMFile(outDir)
 	wasmSize := ""
-	gzipNote := ""
-	if wasmInfo != nil {
-		kb := float64(wasmInfo.Size()) / 1024
-		mb := kb / 1024
-		if mb >= 1 {
-			wasmSize = fmt.Sprintf("%.1f MB", mb)
+	if info, _ := os.Stat(wasmPath); info != nil {
+		kb := float64(info.Size()) / 1024
+		if kb >= 1024 {
+			wasmSize = fmt.Sprintf("%.1f MB", kb/1024)
 		} else {
 			wasmSize = fmt.Sprintf("%.0f KB", kb)
 		}
-		// WASM compresses very well — show estimated gzip size
-		gzipNote = fmt.Sprintf("~%.0f KB gzipped", kb*0.3)
 	}
 
 	fmt.Printf("  %s Build complete!\n\n", green("✓"))
-	fmt.Printf("  %s\n", gray("Output:"))
-	fmt.Printf("    dist/app.wasm      %s  (%s)\n", gray(wasmSize), gray(gzipNote))
-	fmt.Printf("    dist/wasm_exec.js\n")
-	fmt.Printf("    dist/index.html\n\n")
-	fmt.Printf("  %s Deploy the dist/ folder to any static host\n", gray("→"))
-	fmt.Printf("  %s Enable gzip/brotli on your server for best load times\n\n", gray("→"))
+	fmt.Printf("  %s %s  (%s)\n", gray("wasm:"), filepath.Base(wasmPath), gray(wasmSize))
+
+	// Show compressed sizes if present
+	if info, _ := os.Stat(wasmPath + ".br"); info != nil {
+		fmt.Printf("  %s app.wasm.br  %.0f KB  (served with Content-Encoding: br)\n",
+			gray("cdn:"), float64(info.Size())/1024)
+	} else if info, _ := os.Stat(wasmPath + ".gz"); info != nil {
+		fmt.Printf("  %s app.wasm.gz  %.0f KB  (served with Content-Encoding: gzip)\n",
+			gray("cdn:"), float64(info.Size())/1024)
+	}
+
+	fmt.Printf("\n  %s Deploy the %s/ folder to any static host or CDN\n", gray("→"), outDir)
+	if !opts.tiny {
+		fmt.Printf("  %s Tip: rxgo build --prod  (TinyGo + hashing + brotli — much smaller)\n", gray("→"))
+	}
+	fmt.Println()
 }
 
 // cmdMCP starts the MCP server
@@ -454,27 +484,71 @@ func cmdAI() {
 // Build helpers
 // ---------------------------------------------------------
 
+// buildOptions controls how the WASM binary is built.
+type buildOptions struct {
+	tiny bool // use TinyGo for a much smaller binary
+	hash bool // content-hash the filename for immortal caching
+}
+
 func buildWASM(outDir string) error {
+	return buildWASMOpts(outDir, buildOptions{})
+}
+
+func buildWASMOpts(outDir string, opts buildOptions) error {
 	os.MkdirAll(outDir, 0755)
 
-	// Build the WASM binary — -ldflags "-s -w" strips debug symbols (~30% smaller)
-	cmd := exec.Command("go", "build", "-ldflags", "-s -w", "-o", filepath.Join(outDir, "app.wasm"), ".")
-	cmd.Env = append(os.Environ(),
-		"GOARCH=wasm",
-		"GOOS=js",
-		"GONOSUMDB=github.com/ahmad-nexarapp/*",
-		"GOFLAGS=-mod=mod",
-		"GOPROXY=direct",
-	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	wasmOut := filepath.Join(outDir, "app.wasm")
 
-	if err := cmd.Run(); err != nil {
-		return err
+	if opts.tiny {
+		// TinyGo: dramatically smaller runtime (~500KB vs ~2.3MB).
+		// Requires tinygo installed: https://tinygo.org/getting-started/install/
+		if _, err := exec.LookPath("tinygo"); err != nil {
+			fmt.Printf("  %s tinygo not found — falling back to standard Go build\n", gray("→"))
+			fmt.Printf("  %s install: https://tinygo.org/getting-started/install/\n", gray("→"))
+			opts.tiny = false
+		} else {
+			cmd := exec.Command("tinygo", "build",
+				"-o", wasmOut,
+				"-target", "wasm",
+				"-no-debug",          // strip debug info
+				"-opt", "z",          // optimize aggressively for size
+				".")
+			cmd.Env = append(os.Environ(),
+				"GONOSUMDB=github.com/ahmad-nexarapp/*",
+				"GOFLAGS=-mod=mod",
+			)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("tinygo build failed: %w", err)
+			}
+		}
 	}
 
-	// Copy wasm_exec.js
+	if !opts.tiny {
+		// Standard Go build with symbol stripping
+		cmd := exec.Command("go", "build", "-ldflags", "-s -w", "-o", wasmOut, ".")
+		cmd.Env = append(os.Environ(),
+			"GOARCH=wasm",
+			"GOOS=js",
+			"GONOSUMDB=github.com/ahmad-nexarapp/*",
+			"GOFLAGS=-mod=mod",
+			"GOPROXY=direct",
+		)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+	}
+
+	// Copy the matching wasm_exec.js — TinyGo ships its own variant.
 	wasmExecSrc := wasmExecPath()
+	if opts.tiny {
+		if p := tinygoWasmExecPath(); p != "" {
+			wasmExecSrc = p
+		}
+	}
 	if wasmExecSrc != "" {
 		data, err := os.ReadFile(wasmExecSrc)
 		if err == nil {
@@ -482,14 +556,25 @@ func buildWASM(outDir string) error {
 		}
 	}
 
-	// Copy index.html
+	// Content-hash the wasm filename for immortal caching.
+	// app.wasm -> app.<hash8>.wasm; index.html updated to match.
+	wasmFileName := "app.wasm"
+	if opts.hash {
+		if h, err := fileHash(wasmOut); err == nil {
+			hashed := fmt.Sprintf("app.%s.wasm", h[:8])
+			os.Rename(wasmOut, filepath.Join(outDir, hashed))
+			wasmFileName = hashed
+		}
+	}
+
+	// index.html — substitute the wasm filename
+	indexHTML := defaultIndexHTML
 	if _, err := os.Stat("public/index.html"); err == nil {
 		data, _ := os.ReadFile("public/index.html")
-		os.WriteFile(filepath.Join(outDir, "index.html"), data, 0644)
-	} else {
-		// Use default template
-		os.WriteFile(filepath.Join(outDir, "index.html"), []byte(defaultIndexHTML), 0644)
+		indexHTML = string(data)
 	}
+	indexHTML = strings.ReplaceAll(indexHTML, "/app.wasm", "/"+wasmFileName)
+	os.WriteFile(filepath.Join(outDir, "index.html"), []byte(indexHTML), 0644)
 
 	// Copy public/ assets
 	if _, err := os.Stat("public"); err == nil {
@@ -505,7 +590,6 @@ func buildWASM(outDir string) error {
 			return nil
 		})
 	} else {
-		// No public/ dir — write defaults
 		os.WriteFile(filepath.Join(outDir, "styles.css"), []byte(defaultCSS), 0644)
 		os.WriteFile(filepath.Join(outDir, "favicon.svg"), []byte(faviconSVG), 0644)
 	}
@@ -513,32 +597,117 @@ func buildWASM(outDir string) error {
 	return nil
 }
 
+// fileHash returns the hex sha256 of a file.
+func fileHash(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// tinygoWasmExecPath locates TinyGo's wasm_exec.js.
+func tinygoWasmExecPath() string {
+	out, err := exec.Command("tinygo", "env", "TINYGOROOT").Output()
+	if err != nil {
+		return ""
+	}
+	root := strings.TrimSpace(string(out))
+	p := filepath.Join(root, "targets", "wasm_exec.js")
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	return ""
+}
+
 // compressWASM gzips the WASM binary for servers that support pre-compressed files
 func compressWASM(outDir string) {
-	wasmPath := filepath.Join(outDir, "app.wasm")
-	gzPath := wasmPath + ".gz"
-
-	cmd := exec.Command("gzip", "-k", "-9", "-f", wasmPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		// gzip not available — try Go's compress/gzip
-		fmt.Printf("  %s gzip not found — skipping compression\n", gray("→"))
+	// Find the wasm file (may be content-hashed)
+	wasmPath := findWASMFile(outDir)
+	if wasmPath == "" {
+		fmt.Printf("  %s no wasm file found to compress\n", gray("→"))
 		return
 	}
 
 	origInfo, _ := os.Stat(wasmPath)
-	gzInfo, _ := os.Stat(gzPath)
-	if origInfo != nil && gzInfo != nil {
-		ratio := float64(gzInfo.Size()) / float64(origInfo.Size()) * 100
-		fmt.Printf("  %s Compressed: %.1f MB → %.0f KB (%.0f%%)\n",
-			green("✓"),
-			float64(origInfo.Size())/1024/1024,
-			float64(gzInfo.Size())/1024,
-			ratio,
-		)
-		fmt.Printf("  %s Configure your server to serve app.wasm.gz with Content-Encoding: gzip\n\n", gray("→"))
+	origSize := int64(0)
+	if origInfo != nil {
+		origSize = origInfo.Size()
 	}
+
+	// gzip (universally supported)
+	if exec.Command("gzip", "-k", "-9", "-f", wasmPath).Run() == nil {
+		if gz, _ := os.Stat(wasmPath + ".gz"); gz != nil {
+			fmt.Printf("  %s gzip:   %.1f MB → %.0f KB\n", green("✓"),
+				float64(origSize)/1048576, float64(gz.Size())/1024)
+		}
+	}
+
+	// brotli (better ratio; serve with Content-Encoding: br)
+	if _, err := exec.LookPath("brotli"); err == nil {
+		if exec.Command("brotli", "-k", "-q", "11", "-f", wasmPath).Run() == nil {
+			if br, _ := os.Stat(wasmPath + ".br"); br != nil {
+				fmt.Printf("  %s brotli: %.1f MB → %.0f KB  (best)\n", green("✓"),
+					float64(origSize)/1048576, float64(br.Size())/1024)
+			}
+		}
+	} else {
+		fmt.Printf("  %s brotli not found — install for ~20%% better compression\n", gray("→"))
+	}
+
+	fmt.Printf("  %s Serve .br (Content-Encoding: br) or .gz (gzip) from your CDN\n\n", gray("→"))
+}
+
+// writeDeployConfigs emits host configuration so hashed wasm is cached
+// forever, compressed variants are served, and SPA routes fall back to
+// index.html. Covers Netlify (_headers/_redirects) and nginx (sample).
+func writeDeployConfigs(outDir string, hashed bool) {
+	cacheRule := "public, max-age=31536000, immutable"
+	if !hashed {
+		cacheRule = "public, max-age=0, must-revalidate"
+	}
+
+	headers := fmt.Sprintf(`# Generated by rxgo build
+/*.wasm
+  Content-Type: application/wasm
+  Cache-Control: %s
+/wasm_exec.js
+  Cache-Control: public, max-age=31536000, immutable
+/*.css
+  Cache-Control: public, max-age=86400
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+`, cacheRule)
+	os.WriteFile(filepath.Join(outDir, "_headers"), []byte(headers), 0644)
+
+	os.WriteFile(filepath.Join(outDir, "_redirects"),
+		[]byte("# Generated by rxgo build\n/*  /index.html  200\n"), 0644)
+
+	nginx := fmt.Sprintf(`# Generated by rxgo build — include in your nginx server block
+location ~* \.wasm$ {
+    types { application/wasm wasm; }
+    add_header Cache-Control "%s";
+    gzip_static on;
+    # brotli_static on;
+}
+location / {
+    try_files $uri /index.html;
+}
+`, cacheRule)
+	os.WriteFile(filepath.Join(outDir, "nginx.conf.sample"), []byte(nginx), 0644)
+}
+
+// findWASMFile returns the path to the app wasm in outDir (hashed or not).
+func findWASMFile(outDir string) string {
+	entries, _ := os.ReadDir(outDir)
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, "app") && strings.HasSuffix(name, ".wasm") {
+			return filepath.Join(outDir, name)
+		}
+	}
+	return ""
 }
 
 // watchAndRebuild watches for file changes and rebuilds
@@ -889,6 +1058,7 @@ func printHelp() {
 	fmt.Printf("    %s <name>        Create a new RyxoGo app\n", cyan("new"))
 	fmt.Printf("    %s               Start dev server with hot reload\n", cyan("serve"))
 	fmt.Printf("    %s               Build for production → dist/\n", cyan("build"))
+	fmt.Printf("    %s        TinyGo+hash+brotli (smallest, recommended)\n", cyan("build --prod"))
 	fmt.Printf("    %s serve         Start MCP server for AI tools\n", cyan("mcp"))
 	fmt.Printf("    %s <type> <Name> Generate component, page, store, or type\n", cyan("generate"))
 	fmt.Printf("    %s sync          Regenerate AI config files\n", cyan("ai"))

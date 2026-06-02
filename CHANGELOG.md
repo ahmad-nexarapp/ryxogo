@@ -5,6 +5,27 @@ All notable changes to RyxoGo are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
+## [v0.4.0] — 2026-06-03
+
+### Added — bundle size & deployment
+- **`rxgo build --prod`** — the recommended production build: TinyGo + content hashing + brotli in one flag.
+- **TinyGo support** (`--tiny`) — produces a ~500 KB binary instead of ~2.3 MB (roughly 4× smaller). Falls back to standard Go automatically if TinyGo isn't installed.
+- **Content-hashed filenames** (`--hash`) — emits `app.<hash>.wasm` so the binary can be cached forever (`immutable`). Repeat visits cost zero bytes for the binary. `index.html` is rewritten to reference the hashed file.
+- **Brotli + gzip precompression** (`--compress`) — generates `.br` and `.gz` variants at build time for CDNs to serve directly. Brotli is ~20% smaller than gzip.
+- **Auto-generated deploy configs** — `_headers` and `_redirects` (Netlify) and `nginx.conf.sample` with correct `application/wasm` type, immutable cache headers for hashed assets, precompressed serving, and SPA fallback.
+- **[PERFORMANCE.md](PERFORMANCE.md)** — honest guide to size tradeoffs, caching strategy, and when to choose RyxoGo vs a JS framework.
+
+### Notes
+The biggest real-world win isn't raw size — it's caching. With content-hashed,
+immutable assets on a CDN, a user downloads the binary once; every later visit
+and every other route costs nothing. See PERFORMANCE.md for the full picture.
+
+### Update
+```bash
+go get github.com/ahmad-nexarapp/ryxogo@v0.4.0
+rxgo build --prod
+```
+
 ## [v0.3.2] — 2026-06-02
 
 ### Added
@@ -106,6 +127,7 @@ rx.BindText(func() string { return strconv.Itoa(p.count.Val()) })
 ### Added
 - Initial release: signals, computed, async signals, virtual DOM renderer, file-based router, HTTP client, `rxgo` CLI (`new`, `serve`, `build`), WASM build pipeline.
 
+[v0.4.0]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.4.0
 [v0.3.2]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.3.2
 [v0.3.1]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.3.1
 [v0.3.0]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.3.0
