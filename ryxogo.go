@@ -263,6 +263,19 @@ func UpdateStore[T any](s *signal.Store[T], fn func(*T)) {
 	s.Update(fn)
 }
 
+// SelectStore reads a derived slice of a store and subscribes the calling
+// component ONLY to that slice. The component re-renders only when the
+// selected value changes — not on every store update.
+//
+//	// Layout re-renders only when the sidebar flag flips:
+//	open := rx.SelectStore(UI, func(s *UIState) any { return s.SidebarOpen }).(bool)
+//
+// The selected value must be comparable with == (bool, string, number,
+// pointer). For slices/maps, select a length or version counter.
+func SelectStore[T any](s *signal.Store[T], selector func(*T) interface{}) interface{} {
+	return signal.Select(s, selector)
+}
+
 // Get performs a GET request and decodes the JSON response into T.
 //
 //	users, err := rx.Get[[]User]("/api/users")

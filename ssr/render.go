@@ -142,11 +142,38 @@ func renderAttrs(sb *strings.Builder, p core.Props) {
 	if p.Value != "" {
 		fmt.Fprintf(sb, ` value="%s"`, html.EscapeString(p.Value))
 	}
+	if p.Name != "" {
+		fmt.Fprintf(sb, ` name="%s"`, html.EscapeString(p.Name))
+	}
+	if p.For != "" {
+		fmt.Fprintf(sb, ` for="%s"`, html.EscapeString(p.For))
+	}
+	if p.AutoComplete != "" {
+		fmt.Fprintf(sb, ` autocomplete="%s"`, html.EscapeString(p.AutoComplete))
+	}
 	if p.Placeholder != "" {
 		fmt.Fprintf(sb, ` placeholder="%s"`, html.EscapeString(p.Placeholder))
 	}
 	if p.Type != "" {
 		fmt.Fprintf(sb, ` type="%s"`, html.EscapeString(p.Type))
+	}
+	if p.Min != "" {
+		fmt.Fprintf(sb, ` min="%s"`, html.EscapeString(p.Min))
+	}
+	if p.Max != "" {
+		fmt.Fprintf(sb, ` max="%s"`, html.EscapeString(p.Max))
+	}
+	if p.Step != "" {
+		fmt.Fprintf(sb, ` step="%s"`, html.EscapeString(p.Step))
+	}
+	if p.Pattern != "" {
+		fmt.Fprintf(sb, ` pattern="%s"`, html.EscapeString(p.Pattern))
+	}
+	if p.Rows != "" {
+		fmt.Fprintf(sb, ` rows="%s"`, html.EscapeString(p.Rows))
+	}
+	if p.Cols != "" {
+		fmt.Fprintf(sb, ` cols="%s"`, html.EscapeString(p.Cols))
 	}
 	if p.Src != "" {
 		fmt.Fprintf(sb, ` src="%s"`, html.EscapeString(p.Src))
@@ -165,6 +192,12 @@ func renderAttrs(sb *strings.Builder, p core.Props) {
 	}
 	if p.Checked {
 		sb.WriteString(` checked`)
+	}
+	if p.Required {
+		sb.WriteString(` required`)
+	}
+	if p.ReadOnly {
+		sb.WriteString(` readonly`)
 	}
 	if len(p.Style) > 0 {
 		keys := sortedKeys(p.Style)

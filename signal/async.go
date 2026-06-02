@@ -24,6 +24,7 @@ type AsyncSignal[T any] struct {
 
 // Async creates a new AsyncSignal and immediately starts fetching.
 func Async[T any](fn func() (T, error)) *AsyncSignal[T] {
+	guardRender("Async")
 	a := &AsyncSignal[T]{state: Loading, fn: fn}
 	go a.run()
 	return a

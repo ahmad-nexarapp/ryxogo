@@ -5,6 +5,40 @@ All notable changes to RyxoGo are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
+## [v0.5.0] — 2026-06-03
+
+Six upstream developer-experience and performance improvements.
+
+### Added
+- **List virtualization** — `rx.VirtualList` renders only the visible window of a large list (plus a small overscan buffer), with spacer elements preserving scroll height. DOM and diff cost stay constant regardless of list size. A 2000-row list renders ~25 nodes instead of 2000.
+- **Scoped store subscriptions** — `rx.SelectStore(store, selector)` subscribes a component to a *slice* of a store. It re-renders only when that selected value changes, not on every store update. Solves the "a sidebar toggle re-renders every page child" problem.
+- **First-class form props** — `Name`, `For`, `AutoComplete`, `Required`, `ReadOnly`, `Min`, `Max`, `Step`, `Pattern`, `Rows`, `Cols` are now real fields on `Props` (no more stuffing them into the `Attrs` map; fixes browser autofill warnings). Rendered in both the WASM renderer and SSR.
+- **Dev-mode footgun guard** — creating `rx.Computed` / `rx.Async` inside `Render()` now panics in dev mode with a clear message pointing you to `Setup()`. This catches the reactivity-storm bug where a new computed is created every frame.
+- **`OnUnmount` auto-cleanup** — computeds and effects created in a page's `Setup()` are now tracked per page instance and automatically stopped when the page unmounts. No more manual `Stop()` bookkeeping or leaked effects across navigation.
+
+### Changed
+- **Stable event binding** — event listeners now survive VDOM patches without replacing the DOM node. Previously each prop update on an element with events cloned and swapped the node (losing focus, scroll position, and node identity). Now each event type binds a stable dispatcher once; patches only swap the stored handler. This removes the need for document-level click delegation workarounds and preserves focus/scroll across re-renders.
+
+### Update
+```bash
+go get github.com/ahmad-nexarapp/ryxogo@v0.5.0
+```
+
+### Examples
+```go
+// Virtualized 2000-row list
+rx.VirtualList(rx.VirtualListProps{
+    Count: 2000, RowHeight: 40, Height: 600,
+    Render: func(i int) *rx.Node { return rx.Div(rx.Props{}, rx.Text(rows[i])) },
+}, p.scrollTop)
+
+// Scoped store read — re-renders only when SidebarOpen flips
+open := rx.SelectStore(UI, func(s *UIState) any { return s.SidebarOpen }).(bool)
+
+// First-class form props
+rx.Input(rx.Props{Name: "email", Type: "email", AutoComplete: "email", Required: true})
+```
+
 ## [v0.4.1] — 2026-06-03
 
 ### Added
@@ -142,6 +176,7 @@ rx.BindText(func() string { return strconv.Itoa(p.count.Val()) })
 ### Added
 - Initial release: signals, computed, async signals, virtual DOM renderer, file-based router, HTTP client, `rxgo` CLI (`new`, `serve`, `build`), WASM build pipeline.
 
+[v0.5.0]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.5.0
 [v0.4.1]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.4.1
 [v0.4.0]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.4.0
 [v0.3.2]: https://github.com/ahmad-nexarapp/ryxogo/releases/tag/v0.3.2

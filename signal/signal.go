@@ -111,6 +111,7 @@ type Computed[T any] struct {
 }
 
 func Derive[T any](fn func() T) *Computed[T] {
+	guardRender("Computed")
 	c := &Computed[T]{fn: fn}
 	// Create a single Effect that re-runs when any dep changes
 	c.eff = newEffect(func() {
@@ -126,6 +127,7 @@ func Derive[T any](fn func() T) *Computed[T] {
 		notifyGlobal()
 	})
 	c.eff.run()
+	registerInScope(c) // auto-Stop on page unmount if a scope is active
 	return c
 }
 
@@ -223,6 +225,7 @@ func (e *Effect) track(register func(*subscription)) {
 func Watch(fn func()) *Effect {
 	e := newEffect(fn)
 	e.run()
+	registerInScope(e) // auto-Stop on page unmount if a scope is active
 	return e
 }
 
@@ -258,5 +261,102 @@ func notifyGlobal() {
 	globalMu.Unlock()
 	if fn != nil {
 		fn()
+	}
+}
+
+// ---------------------------------------------------------
+// Scope — collects computeds/effects for bulk cleanup (OnUnmount)
+// ---------------------------------------------------------
+
+// Stoppable is anything that can be stopped (Computed, Effect).
+type Stoppable interface{ Stop() }
+
+var scopeMu sync.Mutex
+var activeScope *Scope
+
+// Scope collects Stoppable resources created while it is active, so they can
+// all be released together — e.g. when a page unmounts. The renderer activates
+// a fresh scope around each page's Setup() and stops it on navigation away.
+type Scope struct {
+	items []Stoppable
+}
+
+// NewScope creates an empty scope.
+func NewScope() *Scope { return &Scope{} }
+
+// Activate makes this scope current and returns a restore function.
+// Computeds and effects created while active are tracked for cleanup.
+func (s *Scope) Activate() func() {
+	scopeMu.Lock()
+	prev := activeScope
+	activeScope = s
+	scopeMu.Unlock()
+	return func() {
+		scopeMu.Lock()
+		activeScope = prev
+		scopeMu.Unlock()
+	}
+}
+
+// Stop releases every resource collected by this scope.
+func (s *Scope) Stop() {
+	for _, it := range s.items {
+		it.Stop()
+	}
+	s.items = nil
+}
+
+// register adds a Stoppable to the active scope, if any.
+func registerInScope(s Stoppable) {
+	scopeMu.Lock()
+	sc := activeScope
+	scopeMu.Unlock()
+	if sc != nil {
+		sc.items = append(sc.items, s)
+	}
+}
+
+// ---------------------------------------------------------
+// Dev guard — catch Computed/Async created inside Render()
+// ---------------------------------------------------------
+
+var renderingMu sync.Mutex
+var insideRender bool
+var devMode bool
+
+// SetDevMode enables runtime guards that catch common footguns.
+// The renderer enables this in dev builds.
+func SetDevMode(on bool) {
+	renderingMu.Lock()
+	devMode = on
+	renderingMu.Unlock()
+}
+
+// EnterRender marks that a component's Render() is executing. The renderer
+// calls this around each Render so the guard can detect signals created
+// in the wrong place.
+func EnterRender() func() {
+	renderingMu.Lock()
+	insideRender = true
+	renderingMu.Unlock()
+	return func() {
+		renderingMu.Lock()
+		insideRender = false
+		renderingMu.Unlock()
+	}
+}
+
+// guardRender panics (in dev mode) if a long-lived signal is created during
+// Render(). Creating Computed/Async in Render makes a new one every frame —
+// a reactivity storm. They belong in Setup().
+func guardRender(what string) {
+	renderingMu.Lock()
+	dev := devMode
+	in := insideRender
+	renderingMu.Unlock()
+	if dev && in {
+		panic("ryxogo: rx." + what + " was created inside Render(). " +
+			"This creates a new " + what + " on every render (a reactivity storm). " +
+			"Move it into Setup() instead — create it once, read it in Render().")
 	}
 }

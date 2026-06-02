@@ -14,6 +14,7 @@ import (
 	"syscall/js"
 
 	"github.com/ahmad-nexarapp/ryxogo/core"
+	"github.com/ahmad-nexarapp/ryxogo/signal"
 )
 
 type Renderer struct {
@@ -33,7 +34,9 @@ func New(mountID string, comp core.Component) *Renderer {
 
 func (r *Renderer) Mount() {
 	safeRender(r.rootEl, func() {
+		done := signal.EnterRender()
 		newTree := r.comp.Render()
+		done()
 		r.rootEl.Set("innerHTML", "")
 		r.rootEl.Call("appendChild", r.create(newTree))
 		r.rootNode = newTree
@@ -42,7 +45,9 @@ func (r *Renderer) Mount() {
 
 func (r *Renderer) Update() {
 	safeRender(r.rootEl, func() {
+		done := signal.EnterRender()
 		newTree := r.comp.Render()
+		done()
 		r.patch(r.rootEl, r.rootNode, newTree)
 		r.rootNode = newTree
 	})
@@ -85,7 +90,7 @@ func (r *Renderer) create(node *core.Node) js.Value {
 	case core.ElementNode:
 		el := doc.Call("createElement", node.Tag)
 		r.applyAttrs(el, node.Props)
-		r.attachEvents(el, node.Props)
+		r.bindEvents(el, node.Props)
 		// Fine-grained attribute / style / visibility bindings.
 		// Each subscribes only to the signals its compute fn reads, and
 		// updates just this element — Render() never re-runs for these.
@@ -192,36 +197,32 @@ func (r *Renderer) patchChildren(parent js.Value, oldCh, newCh []*core.Node) {
 // updateProps — F2: cloneNode strips old listeners
 // ---------------------------------------------------------
 
+// updateProps updates attributes and swaps event handlers in place.
+// No cloneNode, no node replacement — the element keeps its identity, focus,
+// and scroll position. Stable dispatchers (events_wasm.go) mean the
+// addEventListener bindings never change; we only swap the stored handlers.
 func (r *Renderer) updateProps(el js.Value, old, new core.Props) js.Value {
 	r.applyAttrs(el, new)
-	if !hasAnyEvent(new) {
+	if !hasAnyEvent(new) && !hasAnyEvent(old) {
 		return el
 	}
-	// Release old funcs before cloning
-	releaseNode(el)
-
-	// cloneNode(false) drops all addEventListener listeners atomically
-	clone := el.Call("cloneNode", false)
-	// Move children
-	for {
-		child := el.Get("firstChild")
-		if child.IsNull() || child.IsUndefined() { break }
-		clone.Call("appendChild", child)
+	id := getOrSetID(el)
+	hs := lookupHandlers(id)
+	if hs == nil {
+		// Element gained events on this update — bind fresh.
+		r.bindEvents(el, new)
+		return el
 	}
-	// Swap in DOM
-	parent := el.Get("parentNode")
-	if !parent.IsNull() && !parent.IsUndefined() {
-		parent.Call("replaceChild", clone, el)
-	}
-	r.attachEvents(clone, new)
-	return clone
+	// Swap handlers to the new props; bind any newly-needed event types.
+	r.updateHandlers(el, hs, new)
+	return el
 }
 
 func hasAnyEvent(p core.Props) bool {
 	return p.OnClick != nil || p.OnInput != nil || p.OnChange != nil ||
 		p.OnSubmit != nil || p.OnFocus != nil || p.OnBlur != nil ||
 		p.OnKeyDown != nil || p.OnKeyUp != nil || p.OnMouseOver != nil ||
-		p.OnMouseOut != nil
+		p.OnMouseOut != nil || p.OnScrollTop != nil
 }
 
 // ---------------------------------------------------------
@@ -236,10 +237,21 @@ func (r *Renderer) applyAttrs(el js.Value, p core.Props) {
 		for k, v := range p.Style { s.Set(camelCase(k), v) }
 	}
 	if p.Value != "" { el.Set("value", p.Value) }
+	if p.Name != "" { el.Set("name", p.Name) }
 	if p.Placeholder != "" { el.Set("placeholder", p.Placeholder) }
 	el.Set("disabled", p.Disabled)
 	if p.Checked { el.Set("checked", true) }
+	if p.Required { el.Set("required", true) }
+	if p.ReadOnly { el.Set("readOnly", true) }
 	if p.Type != "" { el.Set("type", p.Type) }
+	if p.For != "" { el.Call("setAttribute", "for", p.For) }
+	if p.AutoComplete != "" { el.Call("setAttribute", "autocomplete", p.AutoComplete) }
+	if p.Min != "" { el.Call("setAttribute", "min", p.Min) }
+	if p.Max != "" { el.Call("setAttribute", "max", p.Max) }
+	if p.Step != "" { el.Call("setAttribute", "step", p.Step) }
+	if p.Pattern != "" { el.Call("setAttribute", "pattern", p.Pattern) }
+	if p.Rows != "" { el.Call("setAttribute", "rows", p.Rows) }
+	if p.Cols != "" { el.Call("setAttribute", "cols", p.Cols) }
 	if p.Src != "" { el.Set("src", p.Src) }
 	if p.Alt != "" { el.Set("alt", p.Alt) }
 	if p.Href != "" { el.Set("href", p.Href) }
@@ -249,83 +261,8 @@ func (r *Renderer) applyAttrs(el js.Value, p core.Props) {
 }
 
 // ---------------------------------------------------------
-// attachEvents — all funcs tracked in funcStore for cleanup
+// attachEvents was replaced by the stable dispatcher system in events_wasm.go.
 // ---------------------------------------------------------
-
-func (r *Renderer) attachEvents(el js.Value, p core.Props) {
-	if p.OnClick != nil {
-		fn := p.OnClick
-		isAnchor := el.Get("tagName").String() == "A"
-		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
-			// Fix: preventDefault on <a> prevents browser from following href
-			// This stops the WASM-reload bug on every Link click
-			if isAnchor && len(args) > 0 {
-				args[0].Call("preventDefault")
-			}
-			fn()
-			return nil
-		})
-		el.Call("addEventListener", "click", f)
-	}
-	if p.OnInput != nil {
-		fn := p.OnInput
-		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
-			fn(el.Get("value").String()); return nil
-		})
-		el.Call("addEventListener", "input", f)
-	}
-	if p.OnChange != nil {
-		fn := p.OnChange
-		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
-			fn(el.Get("value").String()); return nil
-		})
-		el.Call("addEventListener", "change", f)
-	}
-	if p.OnSubmit != nil {
-		fn := p.OnSubmit
-		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
-			if len(args) > 0 { args[0].Call("preventDefault") }
-			fn(); return nil
-		})
-		el.Call("addEventListener", "submit", f)
-	}
-	if p.OnFocus != nil {
-		fn := p.OnFocus
-		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} { fn(); return nil })
-		el.Call("addEventListener", "focus", f)
-	}
-	if p.OnBlur != nil {
-		fn := p.OnBlur
-		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} { fn(); return nil })
-		el.Call("addEventListener", "blur", f)
-	}
-	if p.OnKeyDown != nil {
-		fn := p.OnKeyDown
-		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
-			key := ""; if len(args) > 0 { key = args[0].Get("key").String() }
-			fn(key); return nil
-		})
-		el.Call("addEventListener", "keydown", f)
-	}
-	if p.OnKeyUp != nil {
-		fn := p.OnKeyUp
-		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} {
-			key := ""; if len(args) > 0 { key = args[0].Get("key").String() }
-			fn(key); return nil
-		})
-		el.Call("addEventListener", "keyup", f)
-	}
-	if p.OnMouseOver != nil {
-		fn := p.OnMouseOver
-		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} { fn(); return nil })
-		el.Call("addEventListener", "mouseover", f)
-	}
-	if p.OnMouseOut != nil {
-		fn := p.OnMouseOut
-		f := r.makeFunc(el, func(this js.Value, args []js.Value) interface{} { fn(); return nil })
-		el.Call("addEventListener", "mouseout", f)
-	}
-}
 
 func camelCase(s string) string {
 	parts := strings.Split(s, "-")

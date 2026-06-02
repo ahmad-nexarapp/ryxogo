@@ -58,7 +58,7 @@ func (r *Renderer) hydrateNode(el js.Value, node *core.Node) {
 	case core.ElementNode:
 		node.DOMRef = el
 		// Attach event handlers to the existing element
-		r.attachEvents(el, node.Props)
+		r.bindEvents(el, node.Props)
 
 		// Recurse into children
 		childNodes := el.Get("childNodes")

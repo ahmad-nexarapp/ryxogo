@@ -75,6 +75,9 @@ func releaseNode(ref interface{}) {
 	if id == "" {
 		return
 	}
+	// Release stable event dispatchers (events_wasm.go) for this element.
+	releaseEvents(id)
+
 	funcs.mu.Lock()
 	fns := funcs.store[id]
 	delete(funcs.store, id)

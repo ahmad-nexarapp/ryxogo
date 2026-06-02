@@ -14,6 +14,10 @@ import (
 func run(a *App) {
 	var cleanup func()
 
+	// Enable dev-mode guards (catches Computed/Async created in Render()).
+	// Cheap (one mutex check per signal creation); harmless in production.
+	signal.SetDevMode(true)
+
 	// Wire core.Navigate so rx.Link works without import cycle
 	core.Navigate = func(path string) {
 		a.router.Navigate(path)
@@ -38,8 +42,15 @@ func run(a *App) {
 		c, ok := comp.(Component)
 		if !ok { return }
 
+		// Activate a per-page signal scope so every Computed/Watch created
+		// in Setup() is tracked and auto-Stop()ped when the page unmounts.
+		scope := signal.NewScope()
+		restoreScope := scope.Activate()
+
 		type setupper interface{ Setup() }
 		if s, ok := c.(setupper); ok { s.Setup() }
+
+		restoreScope()
 
 		r := renderer.New(a.rootID, c)
 
@@ -50,6 +61,7 @@ func run(a *App) {
 		prevComp := c
 		cleanup = func() {
 			page.stop()
+			scope.Stop() // auto-Stop all computeds/effects from Setup()
 			// Call OnUnmount lifecycle hook
 			if u, ok := prevComp.(interface{ OnUnmount() }); ok {
 				u.OnUnmount()

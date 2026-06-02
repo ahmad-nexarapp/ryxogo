@@ -55,13 +55,25 @@ type Props struct {
 	OnKeyUp     func(key string)
 	OnMouseOver func()
 	OnMouseOut  func()
+	OnScrollTop func(scrollTop int) // fires on scroll with element.scrollTop
 
 	// Form
 	Value       string
+	Name        string // form field name — fixes autofill warnings
 	Placeholder string
 	Disabled    bool
 	Checked     bool
+	Required    bool
+	ReadOnly    bool
 	Type        string // input type
+	For         string // <label for="...">
+	AutoComplete string // "on", "off", "email", "current-password", etc
+	Min         string // numeric/date inputs
+	Max         string
+	Step        string
+	Pattern     string // validation regex
+	Rows        string // textarea
+	Cols        string // textarea
 	Src         string
 	Alt         string
 	Href        string
