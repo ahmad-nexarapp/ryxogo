@@ -619,77 +619,93 @@ func NewServer(root string) *Server {
 }
 
 // Tools returns the list of MCP tools this server exposes
-func (s *Server) Tools() []Tool {
-	return []Tool{
+func (s *Server) Tools() []ToolDef {
+	return []ToolDef{
 		{
 			Name:        "get_app_schema",
 			Description: "Returns the complete RyxoGo app schema — all components, pages, routes, stores, and types. Call this first before generating any code.",
-			InputSchema: map[string]interface{}{},
+			InputSchema: InputSchema{Type: "object"},
 		},
 		{
 			Name:        "get_component",
 			Description: "Returns the full source code and schema for a specific component.",
-			InputSchema: map[string]interface{}{
-				"name": "string — the component name e.g. ProductCard",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"name": {Type: "string", Description: "Component name e.g. ProductCard"},
+				},
+				Required: []string{"name"},
 			},
 		},
 		{
 			Name:        "get_page",
 			Description: "Returns the full source code and schema for a specific page.",
-			InputSchema: map[string]interface{}{
-				"name": "string — the page name e.g. DashboardPage",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"name": {Type: "string", Description: "Page name e.g. DashboardPage"},
+				},
+				Required: []string{"name"},
 			},
 		},
 		{
 			Name:        "list_routes",
 			Description: "Returns all registered routes and their page components.",
-			InputSchema: map[string]interface{}{},
+			InputSchema: InputSchema{Type: "object"},
 		},
 		{
 			Name:        "list_types",
 			Description: "Returns all shared types — use these when generating code to avoid duplicates.",
-			InputSchema: map[string]interface{}{},
+			InputSchema: InputSchema{Type: "object"},
 		},
 		{
 			Name:        "validate_component",
-			Description: "Validates a generated component for correctness before writing to disk.",
-			InputSchema: map[string]interface{}{
-				"code": "string — the Go component source code to validate",
+			Description: "Validates a generated Go component for syntax errors before writing to disk.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"code": {Type: "string", Description: "Go component source code to validate"},
+				},
+				Required: []string{"code"},
 			},
 		},
 		{
 			Name:        "get_conventions",
-			Description: "Returns the project coding conventions — styling framework, naming, patterns.",
-			InputSchema: map[string]interface{}{},
+			Description: "Returns the project coding conventions — styling framework, naming patterns.",
+			InputSchema: InputSchema{Type: "object"},
 		},
 		{
 			Name:        "get_ryxogo_docs",
 			Description: "Returns RyxoGo framework documentation for a specific topic.",
-			InputSchema: map[string]interface{}{
-				"topic": "string — one of: signals, components, routing, fetching, stores, styling",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"topic": {Type: "string", Description: "One of: signals, components, routing, fetching, stores, styling"},
+				},
+				Required: []string{"topic"},
 			},
 		},
 		{
 			Name:        "generate_component_scaffold",
-			Description: "Generates a starter scaffold for a new component based on a description.",
-			InputSchema: map[string]interface{}{
-				"name":        "string — component name",
-				"description": "string — what the component does",
-				"hasProps":    "bool — whether it needs props",
-				"hasFetch":    "bool — whether it fetches data",
+			Description: "Generates a starter scaffold for a new component based on description.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"name":        {Type: "string", Description: "Component name"},
+					"description": {Type: "string", Description: "What the component does"},
+					"hasProps":    {Type: "boolean", Description: "Whether it needs props"},
+					"hasFetch":    {Type: "boolean", Description: "Whether it fetches data"},
+				},
+				Required: []string{"name"},
 			},
 		},
 	}
 }
 
-// Tool describes an MCP tool
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
+// SchemaToJSON serializes the app schema to JSON
+func SchemaToJSON(schema *AppSchema) ([]byte, error) {
+	return json.MarshalIndent(schema, "", "  ")
 }
-
-// Call handles an MCP tool call and returns the result
 func (s *Server) Call(tool string, args map[string]interface{}) (interface{}, error) {
 	// Refresh schema on every call so it's always up to date
 	schema, err := s.scanner.Scan()
@@ -1007,7 +1023,8 @@ Works with any CSS framework. Tailwind is recommended.
 // JSON output helpers
 // ---------------------------------------------------------
 
-// SchemaToJSON serializes the app schema to JSON
-func SchemaToJSON(schema *AppSchema) ([]byte, error) {
-	return json.MarshalIndent(schema, "", "  ")
+
+// Scan scans the project and returns its schema
+func (s *Server) Scan() (*AppSchema, error) {
+	return s.scanner.Scan()
 }

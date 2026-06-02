@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/ahmad-nexarapp/ryxogo/mcp"
 )
 
 const version = "0.1.2"
@@ -135,6 +138,20 @@ func cmdNew() {
 
 	// Generate AI config files
 	generateAIFiles(appName, data)
+
+	// Generate .cursor/mcp.json for Cursor AI
+	cursorMCP := fmt.Sprintf(`{
+  "mcpServers": {
+    "ryxogo": {
+      "command": "rxgo",
+      "args": ["mcp", "serve"],
+      "cwd": "%s"
+    }
+  }
+}`, "${workspaceFolder}")
+	os.MkdirAll(filepath.Join(appName, ".cursor"), 0755)
+	os.WriteFile(filepath.Join(appName, ".cursor", "mcp.json"), []byte(cursorMCP), 0644)
+	step("created", ".cursor/mcp.json")
 
 	// Run go mod tidy
 	fmt.Printf("\n  %s Installing dependencies...\n", cyan("→"))
@@ -324,10 +341,7 @@ func cmdBuild() {
 	fmt.Printf("  %s\n\n", gray("Deploy the dist/ folder to any static host"))
 }
 
-// ---------------------------------------------------------
-// rxgo mcp [serve]
-// ---------------------------------------------------------
-
+// cmdMCP starts the MCP server
 func cmdMCP() {
 	sub := "serve"
 	if len(os.Args) >= 3 {
@@ -337,13 +351,29 @@ func cmdMCP() {
 	switch sub {
 	case "serve":
 		port := "7777"
-		fmt.Printf("\n  %s RyxoGo MCP server\n\n", cyan("⚡"))
-		fmt.Printf("  %s http://localhost:%s\n", green("✓ Running at"), port)
-		fmt.Printf("  %s\n\n", gray("AI tools (Cursor, Claude, Codex) connect here"))
-		fmt.Printf("  %s\n\n", gray("Watching for file changes..."))
+		// Check for --http flag
+		useHTTP := false
+		for _, a := range os.Args {
+			if a == "--http" {
+				useHTTP = true
+			}
+			if strings.HasPrefix(a, "--port=") {
+				port = strings.TrimPrefix(a, "--port=")
+			}
+		}
 
-		// Scan project and serve schema
-		startMCPServer(port)
+		cwd, _ := os.Getwd()
+
+		if useHTTP {
+			// HTTP mode — print status to stdout
+			fmt.Printf("\n  %s RyxoGo MCP server (HTTP)\n\n", cyan("⚡"))
+			fmt.Printf("  %s http://localhost:%s\n\n", green("✓ Running at"), port)
+			startHTTPMCPServer(cwd, port)
+		} else {
+			// Stdio mode — ALL output to stderr, stdout is JSON-RPC only
+			fmt.Fprintln(os.Stderr, "RyxoGo MCP server (stdio) — project:", cwd)
+			startStdioMCPServer(cwd)
+		}
 	default:
 		fmt.Printf("rxgo mcp: unknown subcommand %q\n", sub)
 	}
@@ -664,33 +694,95 @@ func writeGenerated(path, content, kind, name string) {
 	fmt.Printf("\n  %s Generated %s: %s\n\n", green("✓"), kind, path)
 }
 
-// ---------------------------------------------------------
-// MCP server (simple HTTP JSON server)
-// ---------------------------------------------------------
-
+// startMCPServer starts the proper MCP server over stdio (what Cursor uses)
+// or HTTP SSE depending on the transport flag
 func startMCPServer(port string) {
-	mux := http.NewServeMux()
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
 
-	// Schema endpoint
-	mux.HandleFunc("/schema", func(w http.ResponseWriter, r *http.Request) {
+	// Check if running in stdio mode (default for Cursor)
+	// or HTTP mode (for remote/web clients)
+	args := os.Args
+	useHTTP := false
+	for _, a := range args {
+		if a == "--http" || a == "-http" {
+			useHTTP = true
+		}
+	}
+
+	if useHTTP {
+		startHTTPMCPServer(cwd, port)
+	} else {
+		startStdioMCPServer(cwd)
+	}
+}
+
+// startStdioMCPServer runs MCP over stdin/stdout — used by Cursor, Claude Code
+func startStdioMCPServer(projectRoot string) {
+	// Print to stderr so it doesn't pollute the JSON-RPC stream
+	fmt.Fprintln(os.Stderr, "RyxoGo MCP server running (stdio mode)")
+	fmt.Fprintln(os.Stderr, "Project:", projectRoot)
+
+	srv := mcp.NewStdioServer(projectRoot)
+	if err := srv.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "MCP server error:", err)
+		os.Exit(1)
+	}
+}
+
+// startHTTPMCPServer runs an SSE HTTP server for remote clients
+func startHTTPMCPServer(projectRoot, port string) {
+	fmt.Printf("\n  %s RyxoGo MCP server (HTTP mode)\n\n", cyan("⚡"))
+	fmt.Printf("  %s http://localhost:%s\n\n", green("✓ Running at"), port)
+
+	handler := mcp.NewServer(projectRoot)
+	httpMux := http.NewServeMux()
+
+	// JSON-RPC over HTTP POST
+	httpMux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		fmt.Fprintf(w, `{"framework":"ryxogo","version":"%s","status":"running"}`, version)
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(200)
+			return
+		}
+
+		var req struct {
+			Method string                 `json:"method"`
+			Params map[string]interface{} `json:"params"`
+			ID     interface{}            `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+
+		result, err := handler.Call(req.Method, req.Params)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": err.Error(),
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"result": result,
+		})
 	})
 
-	// Tools endpoint
-	mux.HandleFunc("/tools", func(w http.ResponseWriter, r *http.Request) {
+	// Schema endpoint for quick checks
+	httpMux.HandleFunc("/schema", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		fmt.Fprint(w, `["get_app_schema","get_component","list_routes","list_types","validate_component","get_ryxogo_docs","generate_component_scaffold"]`)
+		schema, _ := handler.Scan()
+		b, _ := mcp.SchemaToJSON(schema)
+		w.Write(b)
 	})
 
-	// Health check
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"status":"ok"}`)
-	})
-
-	http.ListenAndServe(":"+port, mux)
+	http.ListenAndServe(":"+port, httpMux)
 }
 
 // ---------------------------------------------------------
