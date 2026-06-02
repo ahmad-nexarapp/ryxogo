@@ -76,6 +76,10 @@ func (s *Signal[T]) Set(v T) {
 	copy(listeners, s.listeners)
 	s.mu.Unlock()
 
+	// Notify global renderer first
+	notifyGlobal()
+
+	// Then notify specific subscribers (computed, effects)
 	for _, fn := range listeners {
 		fn()
 	}
@@ -192,4 +196,29 @@ func (e *Effect) run() {
 		})
 	}
 	e.deps = deps
+}
+
+// ---------------------------------------------------------
+// Global listener — wires all signals to the renderer
+// ---------------------------------------------------------
+
+var globalListener func()
+
+// SetGlobalListener sets a function called whenever ANY signal changes.
+// The renderer calls this before Setup() so signals auto-trigger re-renders.
+// Pass nil to clear.
+func SetGlobalListener(fn func()) {
+	tracker.mu.Lock()
+	globalListener = fn
+	tracker.mu.Unlock()
+}
+
+// notifyGlobal calls the global listener if set
+func notifyGlobal() {
+	tracker.mu.Lock()
+	fn := globalListener
+	tracker.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }

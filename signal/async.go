@@ -53,6 +53,7 @@ func (a *AsyncSignal[T]) run() {
 	a.mu.Unlock()
 
 	// notify all subscribers (triggers re-render)
+	notifyGlobal()
 	for _, fn := range listeners {
 		fn()
 	}

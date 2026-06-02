@@ -127,6 +127,12 @@ func cmdNew() {
 	// Copy wasm_exec.js from Go installation
 	copyWasmExec(appName)
 
+	// Generate styles.css and favicon
+	os.WriteFile(filepath.Join(appName, "public", "styles.css"), []byte(defaultCSS), 0644)
+	step("created", "public/styles.css")
+	os.WriteFile(filepath.Join(appName, "public", "favicon.svg"), []byte(faviconSVG), 0644)
+	step("created", "public/favicon.svg")
+
 	// Generate AI config files
 	generateAIFiles(appName, data)
 
@@ -448,6 +454,10 @@ func buildWASM(outDir string) error {
 			os.WriteFile(dst, data, 0644)
 			return nil
 		})
+	} else {
+		// No public/ dir — write defaults
+		os.WriteFile(filepath.Join(outDir, "styles.css"), []byte(defaultCSS), 0644)
+		os.WriteFile(filepath.Join(outDir, "favicon.svg"), []byte(faviconSVG), 0644)
 	}
 
 	return nil
@@ -863,21 +873,66 @@ const defaultIndexHTML = `<!DOCTYPE html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RyxoGo App</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
   <style>
-    #ryxogo-loading { display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#6b7280;gap:10px }
-    .sp { width:18px;height:18px;border:2px solid #e5e7eb;border-top-color:#4f46e5;border-radius:50%;animation:spin .6s linear infinite }
-    @keyframes spin { to { transform:rotate(360deg) } }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,-apple-system,sans-serif;background:#f9fafb;color:#111827}
+    #ryxogo-loading{display:flex;align-items:center;justify-content:center;height:100vh;color:#6b7280;gap:10px;font-size:14px}
+    .sp{width:18px;height:18px;border:2px solid #e5e7eb;border-top-color:#4f46e5;border-radius:50%;animation:spin .6s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
   </style>
 </head>
 <body>
-  <div id="app"><div id="ryxogo-loading"><div class="sp"></div><span>Loading...</span></div></div>
+  <div id="app">
+    <div id="ryxogo-loading"><div class="sp"></div><span>Loading...</span></div>
+  </div>
   <script src="/wasm_exec.js"></script>
   <script>
     const go = new Go();
-    WebAssembly.instantiateStreaming(fetch('/app.wasm'), go.importObject)
+    WebAssembly.instantiateStreaming(fetch('/app.wasm?v=' + Date.now()), go.importObject)
       .then(r => { document.getElementById('ryxogo-loading')?.remove(); go.run(r.instance); })
-      .catch(e => { document.getElementById('app').innerHTML = '<div style="padding:2rem;color:red">Load error: '+e+'</div>'; });
+      .catch(e => { document.getElementById('app').innerHTML = '<div style="padding:2rem;color:#dc2626;font-family:monospace">RyxoGo load error:<br>'+e+'</div>'; });
   </script>
 </body>
 </html>`
+
+const defaultCSS = `/* RyxoGo default styles — replaces Tailwind CDN */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f9fafb;color:#111827;line-height:1.5}
+.min-h-screen{min-height:100vh}
+.flex{display:flex}.items-center{align-items:center}.justify-center{justify-content:center}
+.flex-col{flex-direction:column}.gap-3{gap:.75rem}.gap-4{gap:1rem}
+.p-4{padding:1rem}.p-6{padding:1.5rem}.p-8{padding:2rem}.p-10{padding:2.5rem}
+.px-3{padding-left:.75rem;padding-right:.75rem}.px-4{padding-left:1rem;padding-right:1rem}
+.px-6{padding-left:1.5rem;padding-right:1.5rem}.py-2{padding-top:.5rem;padding-bottom:.5rem}
+.mb-2{margin-bottom:.5rem}.mb-4{margin-bottom:1rem}.mb-6{margin-bottom:1.5rem}.mb-8{margin-bottom:2rem}
+.mt-4{margin-top:1rem}.ml-4{margin-left:1rem}.mx-auto{margin-left:auto;margin-right:auto}
+.w-full{width:100%}.max-w-md{max-width:28rem}.max-w-lg{max-width:32rem}
+.text-sm{font-size:.875rem}.text-lg{font-size:1.125rem}.text-xl{font-size:1.25rem}
+.text-2xl{font-size:1.5rem}.text-3xl{font-size:1.875rem}.text-4xl{font-size:2.25rem}
+.font-medium{font-weight:500}.font-semibold{font-weight:600}.font-bold{font-weight:700}
+.text-center{text-align:center}.text-left{text-align:left}
+.text-white{color:#fff}.text-gray-500{color:#6b7280}.text-gray-700{color:#374151}
+.text-gray-900{color:#111827}.text-indigo-600{color:#4f46e5}.text-red-600{color:#dc2626}
+.text-red-700{color:#b91c1c}.text-green-600{color:#16a34a}
+.bg-white{background:#fff}.bg-gray-50{background:#f9fafb}.bg-gray-100{background:#f3f4f6}
+.bg-gray-200{background:#e5e7eb}.bg-indigo-600{background:#4f46e5}.bg-indigo-700{background:#4338ca}
+.bg-red-100{background:#fee2e2}.bg-blue-600{background:#2563eb}
+.border{border:1px solid #e5e7eb}.border-t{border-top:1px solid #e5e7eb}
+.rounded{border-radius:.25rem}.rounded-lg{border-radius:.5rem}.rounded-xl{border-radius:.75rem}
+.rounded-2xl{border-radius:1rem}.rounded-full{border-radius:9999px}
+.shadow-sm{box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.grid{display:grid}.gap-3{gap:.75rem}
+.cursor-pointer{cursor:pointer}
+.opacity-50{opacity:.5}.disabled\:opacity-50:disabled{opacity:.5}
+button{cursor:pointer;border:none;font-family:inherit;font-size:inherit;transition:opacity .15s}
+button:hover{opacity:.9}
+input,textarea,select{font-family:inherit;font-size:inherit;border:1px solid #d1d5db;border-radius:.375rem;padding:.5rem .75rem;width:100%;outline:none}
+input:focus,textarea:focus{border-color:#4f46e5;box-shadow:0 0 0 2px rgba(79,70,229,.2)}
+`
+
+const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="6" fill="#4f46e5"/>
+  <text x="16" y="22" text-anchor="middle" font-size="18" fill="#fff" font-family="system-ui">⚡</text>
+</svg>`

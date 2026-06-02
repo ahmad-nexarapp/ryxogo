@@ -1,8 +1,6 @@
 //go:build wasm
 
 // Package renderer bridges RyxoGo's virtual DOM to the real browser DOM.
-// This file only compiles when targeting WebAssembly (GOARCH=wasm GOOS=js).
-// It uses Go's syscall/js package to call browser APIs directly.
 package renderer
 
 import (
@@ -13,15 +11,12 @@ import (
 	"github.com/ahmad-nexarapp/ryxogo/core"
 )
 
-// ---------------------------------------------------------
-// Renderer — manages the root DOM mount and re-renders
-// ---------------------------------------------------------
-
-// Renderer mounts a component tree into a real DOM element
+// Renderer manages the root DOM mount and re-renders
 type Renderer struct {
-	rootEl   js.Value   // the real DOM element we mount into
-	rootNode *core.Node // last rendered virtual DOM tree
-	comp     core.Component
+	rootEl    js.Value
+	rootNode  *core.Node
+	comp      core.Component
+	rendering bool // guard against concurrent renders
 }
 
 // New creates a renderer that mounts into the DOM element with the given ID
@@ -31,48 +26,69 @@ func New(mountID string, comp core.Component) *Renderer {
 	if el.IsNull() || el.IsUndefined() {
 		panic(fmt.Sprintf("ryxogo: mount element #%s not found", mountID))
 	}
-	return &Renderer{
-		rootEl: el,
-		comp:   comp,
-	}
+	return &Renderer{rootEl: el, comp: comp}
 }
 
-// Mount performs the first render and mounts into the DOM
+// Mount performs the first render
 func (r *Renderer) Mount() {
 	newTree := r.comp.Render()
-	r.rootEl.Set("innerHTML", "") // clear existing content
+	r.rootEl.Set("innerHTML", "")
 	el := r.createElement(newTree)
 	r.rootEl.Call("appendChild", el)
 	r.rootNode = newTree
 
-	// Call OnMount if implemented
 	if m, ok := r.comp.(core.Mounter); ok {
 		m.OnMount()
 	}
 }
 
-// Update diffs old and new virtual DOM and patches the real DOM
+// Update diffs and patches the DOM — safe to call from requestAnimationFrame
 func (r *Renderer) Update() {
+	if r.rendering {
+		return
+	}
+	r.rendering = true
+	defer func() { r.rendering = false }()
+
 	newTree := r.comp.Render()
-	patches := core.Diff(r.rootNode, newTree)
-	r.applyPatches(r.rootEl, patches)
+	r.patchChildren(r.rootEl, r.rootNode.Children, newTree.Children)
+	// Copy DOMRefs from old tree so future patches work
+	copyDOMRefs(r.rootNode, newTree)
 	r.rootNode = newTree
 }
 
+// copyDOMRefs copies DOM references from old tree to new tree after a diff
+func copyDOMRefs(old, new *core.Node) {
+	if old == nil || new == nil {
+		return
+	}
+	if old.DOMRef != nil && new.DOMRef == nil {
+		new.DOMRef = old.DOMRef
+	}
+	min := len(old.Children)
+	if len(new.Children) < min {
+		min = len(new.Children)
+	}
+	for i := 0; i < min; i++ {
+		copyDOMRefs(old.Children[i], new.Children[i])
+	}
+}
+
 // ---------------------------------------------------------
-// createElement — turns a virtual DOM node into a real DOM element
+// createElement — turns a VNode into a real DOM element
 // ---------------------------------------------------------
 
 func (r *Renderer) createElement(node *core.Node) js.Value {
 	if node == nil {
 		return js.Null()
 	}
-
 	doc := js.Global().Get("document")
 
 	switch node.Type {
 	case core.TextNode:
-		return doc.Call("createTextNode", node.Text)
+		el := doc.Call("createTextNode", node.Text)
+		node.DOMRef = el // FIX: store DOMRef for text nodes
+		return el
 
 	case core.FragmentNode:
 		frag := doc.Call("createDocumentFragment")
@@ -86,15 +102,13 @@ func (r *Renderer) createElement(node *core.Node) js.Value {
 	case core.ElementNode:
 		el := doc.Call("createElement", node.Tag)
 		r.applyProps(el, node.Props)
-
 		for _, child := range node.Children {
 			if child != nil {
-				el.Call("appendChild", r.createElement(child))
+				childEl := r.createElement(child)
+				el.Call("appendChild", childEl)
 			}
 		}
-
-		// Store reference back to real DOM element
-		node.DOMRef = el
+		node.DOMRef = el // store DOMRef for element nodes
 		return el
 	}
 
@@ -102,29 +116,101 @@ func (r *Renderer) createElement(node *core.Node) js.Value {
 }
 
 // ---------------------------------------------------------
-// applyProps — sets attributes, classes, styles, event handlers
+// Patch — smart update without full re-create
+// ---------------------------------------------------------
+
+// patchNode updates a single node in place when possible
+func (r *Renderer) patchNode(parent js.Value, old, new *core.Node, index int) {
+	if old == nil && new == nil {
+		return
+	}
+
+	// New node — append it
+	if old == nil {
+		el := r.createElement(new)
+		parent.Call("appendChild", el)
+		return
+	}
+
+	// Removed — delete it
+	if new == nil {
+		if old.DOMRef != nil {
+			el := old.DOMRef.(js.Value)
+			if !el.IsNull() && !el.IsUndefined() {
+				parent.Call("removeChild", el)
+			}
+		}
+		return
+	}
+
+	// Both text nodes
+	if old.Type == core.TextNode && new.Type == core.TextNode {
+		if old.Text != new.Text && old.DOMRef != nil {
+			el := old.DOMRef.(js.Value)
+			el.Set("nodeValue", new.Text) // FIX: use nodeValue for text nodes
+			new.DOMRef = el
+		} else {
+			new.DOMRef = old.DOMRef
+		}
+		return
+	}
+
+	// Different types or different tags — replace entirely
+	if old.Type != new.Type || old.Tag != new.Tag {
+		newEl := r.createElement(new)
+		if old.DOMRef != nil {
+			oldEl := old.DOMRef.(js.Value)
+			parent.Call("replaceChild", newEl, oldEl)
+		} else {
+			parent.Call("appendChild", newEl)
+		}
+		return
+	}
+
+	// Same element — update props and recurse into children
+	if old.DOMRef != nil {
+		el := old.DOMRef.(js.Value)
+		new.DOMRef = el
+		r.updateProps(el, old.Props, new.Props)
+		r.patchChildren(el, old.Children, new.Children)
+	}
+}
+
+// patchChildren reconciles two child lists
+func (r *Renderer) patchChildren(parent js.Value, oldChildren, newChildren []*core.Node) {
+	maxLen := len(oldChildren)
+	if len(newChildren) > maxLen {
+		maxLen = len(newChildren)
+	}
+	for i := 0; i < maxLen; i++ {
+		var old, new *core.Node
+		if i < len(oldChildren) {
+			old = oldChildren[i]
+		}
+		if i < len(newChildren) {
+			new = newChildren[i]
+		}
+		r.patchNode(parent, old, new, i)
+	}
+}
+
+// ---------------------------------------------------------
+// applyProps — set attrs, styles, events on a DOM element
 // ---------------------------------------------------------
 
 func (r *Renderer) applyProps(el js.Value, props core.Props) {
-	// Class
 	if props.Class != "" {
 		el.Set("className", props.Class)
 	}
-
-	// ID
 	if props.ID != "" {
 		el.Set("id", props.ID)
 	}
-
-	// Inline styles
 	if len(props.Style) > 0 {
 		style := el.Get("style")
 		for k, v := range props.Style {
 			style.Set(camelCase(k), v)
 		}
 	}
-
-	// Standard attributes
 	if props.Value != "" {
 		el.Set("value", props.Value)
 	}
@@ -152,163 +238,20 @@ func (r *Renderer) applyProps(el js.Value, props core.Props) {
 	if props.Target != "" {
 		el.Set("target", props.Target)
 	}
-
-	// Data attributes
 	for k, v := range props.Data {
 		el.Call("setAttribute", "data-"+k, v)
 	}
-
-	// Extra attributes
 	for k, v := range props.Attrs {
 		el.Call("setAttribute", k, v)
 	}
 
-	// Event handlers — wrapped in js.Func to prevent GC
-	if props.OnClick != nil {
-		fn := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			props.OnClick()
-			return nil
-		})
-		el.Call("addEventListener", "click", fn)
-	}
-
-	if props.OnInput != nil {
-		fn := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			val := el.Get("value").String()
-			props.OnInput(val)
-			return nil
-		})
-		el.Call("addEventListener", "input", fn)
-	}
-
-	if props.OnChange != nil {
-		fn := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			val := el.Get("value").String()
-			props.OnChange(val)
-			return nil
-		})
-		el.Call("addEventListener", "change", fn)
-	}
-
-	if props.OnSubmit != nil {
-		fn := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			if len(args) > 0 {
-				args[0].Call("preventDefault")
-			}
-			props.OnSubmit()
-			return nil
-		})
-		el.Call("addEventListener", "submit", fn)
-	}
-
-	if props.OnFocus != nil {
-		fn := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			props.OnFocus()
-			return nil
-		})
-		el.Call("addEventListener", "focus", fn)
-	}
-
-	if props.OnBlur != nil {
-		fn := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			props.OnBlur()
-			return nil
-		})
-		el.Call("addEventListener", "blur", fn)
-	}
-
-	if props.OnKeyDown != nil {
-		fn := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			key := ""
-			if len(args) > 0 {
-				key = args[0].Get("key").String()
-			}
-			props.OnKeyDown(key)
-			return nil
-		})
-		el.Call("addEventListener", "keydown", fn)
-	}
-
-	if props.OnKeyUp != nil {
-		fn := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			key := ""
-			if len(args) > 0 {
-				key = args[0].Get("key").String()
-			}
-			props.OnKeyUp(key)
-			return nil
-		})
-		el.Call("addEventListener", "keyup", fn)
-	}
-
-	if props.OnMouseOver != nil {
-		fn := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			props.OnMouseOver()
-			return nil
-		})
-		el.Call("addEventListener", "mouseover", fn)
-	}
-
-	if props.OnMouseOut != nil {
-		fn := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			props.OnMouseOut()
-			return nil
-		})
-		el.Call("addEventListener", "mouseout", fn)
-	}
+	r.attachEvents(el, props)
 }
 
-// ---------------------------------------------------------
-// applyPatches — applies diff patches to the real DOM
-// ---------------------------------------------------------
-
-func (r *Renderer) applyPatches(parent js.Value, patches []core.Patch) {
-	for _, patch := range patches {
-		switch patch.Type {
-
-		case core.PatchCreate:
-			el := r.createElement(patch.NewNode)
-			parent.Call("appendChild", el)
-
-		case core.PatchRemove:
-			if patch.OldNode != nil && patch.OldNode.DOMRef != nil {
-				el := patch.OldNode.DOMRef.(js.Value)
-				if !el.IsNull() && !el.IsUndefined() {
-					parent.Call("removeChild", el)
-				}
-			}
-
-		case core.PatchReplace:
-			if patch.OldNode != nil && patch.OldNode.DOMRef != nil {
-				oldEl := patch.OldNode.DOMRef.(js.Value)
-				newEl := r.createElement(patch.NewNode)
-				parent.Call("replaceChild", newEl, oldEl)
-			}
-
-		case core.PatchUpdate:
-			if patch.OldNode != nil && patch.OldNode.DOMRef != nil {
-				el := patch.OldNode.DOMRef.(js.Value)
-				patch.NewNode.DOMRef = el
-				r.updateProps(el, patch.OldNode.Props, patch.NewNode.Props)
-			}
-
-		case core.PatchText:
-			if patch.OldNode != nil && patch.OldNode.DOMRef != nil {
-				el := patch.OldNode.DOMRef.(js.Value)
-				el.Set("textContent", patch.NewNode.Text)
-				patch.NewNode.DOMRef = el
-			}
-		}
-	}
-}
-
-// updateProps efficiently updates only changed props on an existing element
+// updateProps updates only changed props on an existing element
 func (r *Renderer) updateProps(el js.Value, old, new core.Props) {
 	if old.Class != new.Class {
 		el.Set("className", new.Class)
-	}
-	if old.ID != new.ID {
-		el.Set("id", new.ID)
 	}
 	if old.Value != new.Value {
 		el.Set("value", new.Value)
@@ -328,21 +271,76 @@ func (r *Renderer) updateProps(el js.Value, old, new core.Props) {
 	if old.Href != new.Href {
 		el.Set("href", new.Href)
 	}
-
-	// Update styles
 	if len(new.Style) > 0 {
 		style := el.Get("style")
 		for k, v := range new.Style {
 			style.Set(camelCase(k), v)
 		}
 	}
-
-	// Re-attach event handlers (always update to latest closures)
-	r.applyProps(el, new)
+	// Always re-attach event handlers so closures capture latest state
+	r.attachEvents(el, new)
 }
 
-// camelCase converts CSS property names to JS camelCase
-// "background-color" → "backgroundColor"
+// attachEvents wires Go functions to DOM events
+func (r *Renderer) attachEvents(el js.Value, props core.Props) {
+	if props.OnClick != nil {
+		fn := props.OnClick
+		el.Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			fn()
+			return nil
+		}))
+	}
+	if props.OnInput != nil {
+		fn := props.OnInput
+		el.Call("addEventListener", "input", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			fn(el.Get("value").String())
+			return nil
+		}))
+	}
+	if props.OnChange != nil {
+		fn := props.OnChange
+		el.Call("addEventListener", "change", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			fn(el.Get("value").String())
+			return nil
+		}))
+	}
+	if props.OnSubmit != nil {
+		fn := props.OnSubmit
+		el.Call("addEventListener", "submit", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			if len(args) > 0 {
+				args[0].Call("preventDefault")
+			}
+			fn()
+			return nil
+		}))
+	}
+	if props.OnFocus != nil {
+		fn := props.OnFocus
+		el.Call("addEventListener", "focus", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			fn()
+			return nil
+		}))
+	}
+	if props.OnBlur != nil {
+		fn := props.OnBlur
+		el.Call("addEventListener", "blur", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			fn()
+			return nil
+		}))
+	}
+	if props.OnKeyDown != nil {
+		fn := props.OnKeyDown
+		el.Call("addEventListener", "keydown", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			key := ""
+			if len(args) > 0 {
+				key = args[0].Get("key").String()
+			}
+			fn(key)
+			return nil
+		}))
+	}
+}
+
 func camelCase(s string) string {
 	parts := strings.Split(s, "-")
 	if len(parts) == 1 {
