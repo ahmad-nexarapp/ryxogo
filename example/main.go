@@ -90,7 +90,7 @@ func (p *UsersPage) Render() *rx.Node {
 
 func main() {
 	app := rx.New()
-	app.Route("/", &CounterPage{})
-	app.Route("/users", &UsersPage{})
+	app.Route("/", func() rx.Component { return &CounterPage{} })
+	app.Route("/users", func() rx.Component { return &UsersPage{} })
 	app.Run()
 }
